@@ -4,7 +4,7 @@
 substitutions:
   _SERVICE_NAME: hyperion-crawler
   _REGION: asia-northeast3
-  _SERVICE_ACCOUNT: hyperion-crawler@${PROJECT_ID}.iam.gserviceaccount.com
+  _SERVICE_ACCOUNT: github-actions-dev@${PROJECT_ID}.iam.gserviceaccount.com
 
 steps:
   # 1. 이전 이미지 가져오기 (캐시용)
@@ -101,28 +101,113 @@ steps:
   - name: 'gcr.io/cloud-builders/gcloud'
     id: 'notify-success'
     entrypoint: 'bash'
-    secretEnv: ['SLACK_WEBHOOK_URL']
+    secretEnv: ['TEAMS_WEBHOOK_URL']
     args:
       - '-c'
       - |
-        if [ ! -z "$${SLACK_WEBHOOK_URL}" ]; then
+        if [ ! -z "$${TEAMS_WEBHOOK_URL}" ]; then
           SERVICE_URL=$(gcloud run services describe ${_SERVICE_NAME}-${BRANCH_NAME} \
             --region ${_REGION} \
             --format 'value(status.url)')
           
-          curl -X POST $${SLACK_WEBHOOK_URL} \
+          # Teams 메시지 카드 형식
+          curl -X POST $${TEAMS_WEBHOOK_URL} \
             -H 'Content-Type: application/json' \
             -d '{
-              "text": "✅ Hyperion Crawler 배포 성공",
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*✅ Hyperion Crawler 배포 성공*\n*환경:* `'"${BRANCH_NAME}"'`\n*커밋:* `'"${SHORT_SHA}"'`\n*URL:* '"$${SERVICE_URL}"'"
+              "@type": "MessageCard",
+              "@context": "https://schema.org/extensions",
+              "themeColor": "00FF00",
+              "summary": "Hyperion Crawler 배포 성공",
+              "sections": [{
+                "activityTitle": "✅ Hyperion Crawler 배포 성공",
+                "facts": [
+                  {
+                    "name": "환경",
+                    "value": "'"${BRANCH_NAME}"'"
+                  },
+                  {
+                    "name": "커밋",
+                    "value": "'"${SHORT_SHA}"'"
+                  },
+                  {
+                    "name": "프로젝트",
+                    "value": "'"${PROJECT_ID}"'"
+                  },
+                  {
+                    "name": "빌드 ID",
+                    "value": "'"${BUILD_ID}"'"
                   }
-                }
-              ]
+                ],
+                "markdown": true
+              }],
+              "potentialAction": [{
+                "@type": "OpenUri",
+                "name": "서비스 URL 열기",
+                "targets": [{
+                  "os": "default",
+                  "uri": "'"$${SERVICE_URL}"'"
+                }]
+              },
+              {
+                "@type": "OpenUri",
+                "name": "빌드 로그 보기",
+                "targets": [{
+                  "os": "default",
+                  "uri": "https://console.cloud.google.com/cloud-build/builds/'"${BUILD_ID}"'?project='"${PROJECT_ID}"'"
+                }]
+              }]
+            }' || true
+        fi
+
+# 빌드 실패 시 알림
+# Cloud Build는 자동으로 실패 시 이 스텝을 실행합니다
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'notify-failure'
+    entrypoint: 'bash'
+    secretEnv: ['TEAMS_WEBHOOK_URL']
+    waitFor: ['-']  # 이전 스텝과 무관하게 실행
+    args:
+      - '-c'
+      - |
+        # 빌드 상태 확인 (이 스텝은 실패 시에만 실행됨)
+        if [ "${_BUILD_STATUS}" = "FAILURE" ] && [ ! -z "$${TEAMS_WEBHOOK_URL}" ]; then
+          curl -X POST $${TEAMS_WEBHOOK_URL} \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "@type": "MessageCard",
+              "@context": "https://schema.org/extensions",
+              "themeColor": "FF0000",
+              "summary": "Hyperion Crawler 배포 실패",
+              "sections": [{
+                "activityTitle": "❌ Hyperion Crawler 배포 실패",
+                "facts": [
+                  {
+                    "name": "환경",
+                    "value": "'"${BRANCH_NAME}"'"
+                  },
+                  {
+                    "name": "커밋",
+                    "value": "'"${SHORT_SHA}"'"
+                  },
+                  {
+                    "name": "프로젝트",
+                    "value": "'"${PROJECT_ID}"'"
+                  },
+                  {
+                    "name": "빌드 ID",
+                    "value": "'"${BUILD_ID}"'"
+                  }
+                ],
+                "markdown": true
+              }],
+              "potentialAction": [{
+                "@type": "OpenUri",
+                "name": "빌드 로그 확인",
+                "targets": [{
+                  "os": "default",
+                  "uri": "https://console.cloud.google.com/cloud-build/builds/'"${BUILD_ID}"'?project='"${PROJECT_ID}"'"
+                }]
+              }]
             }' || true
         fi
 
@@ -138,5 +223,5 @@ timeout: '1200s'  # 20분
 # Cloud Build 설정에서 알림을 구성해야 합니다
 availableSecrets:
   secretManager:
-  - versionName: projects/${PROJECT_ID}/secrets/slack-webhook-url/versions/latest
-    env: 'SLACK_WEBHOOK_URL'
+  - versionName: projects/${PROJECT_ID}/secrets/teams-webhook-url/versions/latest
+    env: 'TEAMS_WEBHOOK_URL'

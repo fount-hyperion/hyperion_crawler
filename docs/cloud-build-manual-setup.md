@@ -43,22 +43,28 @@
      - `_ENVIRONMENT`: `prod`
 3. "만들기" 클릭
 
-## 4. Slack 알림 설정 (선택사항)
+## 4. Microsoft Teams 알림 설정 (선택사항)
 
-1. Secret Manager에서 Slack Webhook URL 저장:
+1. Teams 채널에서 Webhook 생성:
+   - 채널 → 커넥터 → 수신 웹후크 구성
+   - Webhook URL 복사
+
+2. Secret Manager에서 Teams Webhook URL 저장:
    ```bash
-   echo -n "YOUR_SLACK_WEBHOOK_URL" | \
-   gcloud secrets create slack-webhook-url --data-file=-
+   echo -n "YOUR_TEAMS_WEBHOOK_URL" | \
+   gcloud secrets create teams-webhook-url --data-file=-
    ```
 
-2. Cloud Build 서비스 계정에 권한 부여:
+3. Cloud Build 서비스 계정에 권한 부여:
    ```bash
    PROJECT_NUMBER=$(gcloud projects describe $(gcloud config get-value project) --format='value(projectNumber)')
    
-   gcloud secrets add-iam-policy-binding slack-webhook-url \
+   gcloud secrets add-iam-policy-binding teams-webhook-url \
      --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
      --role="roles/secretmanager.secretAccessor"
    ```
+
+4. 자세한 설정은 `teams-webhook-setup.md` 참조
 
 ## 5. 트리거 테스트
 

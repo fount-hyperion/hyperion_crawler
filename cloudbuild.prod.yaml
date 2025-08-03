@@ -70,7 +70,7 @@ steps:
       - '--set-env-vars'
       - 'ENVIRONMENT=production,GOOGLE_CLOUD_PROJECT=${PROJECT_ID}'
 
-  # 5. 배포 확인 및 알림
+  # 5. 배포 확인
   - name: 'gcr.io/cloud-builders/gcloud'
     id: 'verify'
     entrypoint: 'bash'
@@ -85,8 +85,76 @@ steps:
         # 헬스 체크
         curl -f "$${SERVICE_URL}/health" || exit 1
         echo "Production 배포가 성공적으로 완료되었습니다!"
-        
-        # TODO: Slack 또는 이메일 알림 추가
+
+  # 6. 프로덕션 배포 성공 알림
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'notify-success'
+    entrypoint: 'bash'
+    secretEnv: ['TEAMS_WEBHOOK_URL']
+    args:
+      - '-c'
+      - |
+        if [ ! -z "$${TEAMS_WEBHOOK_URL}" ]; then
+          SERVICE_URL=$(gcloud run services describe ${_SERVICE_NAME} \
+            --region ${_REGION} \
+            --format 'value(status.url)')
+          
+          # Teams 메시지 카드 형식 (프로덕션용)
+          curl -X POST $${TEAMS_WEBHOOK_URL} \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "@type": "MessageCard",
+              "@context": "https://schema.org/extensions",
+              "themeColor": "0078D4",
+              "summary": "Hyperion Crawler 프로덕션 배포 성공",
+              "sections": [{
+                "activityTitle": "🚀 Hyperion Crawler 프로덕션 배포 성공",
+                "facts": [
+                  {
+                    "name": "환경",
+                    "value": "**PRODUCTION**"
+                  },
+                  {
+                    "name": "버전",
+                    "value": "'"${SHORT_SHA}"'"
+                  },
+                  {
+                    "name": "프로젝트",
+                    "value": "'"${PROJECT_ID}"'"
+                  },
+                  {
+                    "name": "배포 시간",
+                    "value": "'"$(date +"%Y-%m-%d %H:%M:%S KST")"'"
+                  }
+                ],
+                "markdown": true
+              }],
+              "potentialAction": [{
+                "@type": "OpenUri",
+                "name": "프로덕션 서비스 확인",
+                "targets": [{
+                  "os": "default",
+                  "uri": "'"$${SERVICE_URL}"'"
+                }]
+              },
+              {
+                "@type": "OpenUri",
+                "name": "API 문서 보기",
+                "targets": [{
+                  "os": "default",
+                  "uri": "'"$${SERVICE_URL}/docs"'"
+                }]
+              },
+              {
+                "@type": "OpenUri",
+                "name": "빌드 로그 보기",
+                "targets": [{
+                  "os": "default",
+                  "uri": "https://console.cloud.google.com/cloud-build/builds/'"${BUILD_ID}"'?project='"${PROJECT_ID}"'"
+                }]
+              }]
+            }' || true
+        fi
 
 # 빌드 로그를 Cloud Storage에 저장
 options:
@@ -96,3 +164,9 @@ options:
 
 # 빌드 시간 제한
 timeout: '1200s'  # 20분
+
+# Secret Manager 설정
+availableSecrets:
+  secretManager:
+  - versionName: projects/${PROJECT_ID}/secrets/teams-webhook-url/versions/latest
+    env: 'TEAMS_WEBHOOK_URL'

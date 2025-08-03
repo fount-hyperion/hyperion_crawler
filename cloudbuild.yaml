@@ -1,0 +1,95 @@
+# Cloud Build 설정 파일
+# 이 파일은 GitHub과 연동되어 자동 빌드/배포를 수행합니다.
+
+substitutions:
+  _SERVICE_NAME: hyperion-crawler
+  _REGION: asia-northeast3
+  _SERVICE_ACCOUNT: hyperion-crawler@${PROJECT_ID}.iam.gserviceaccount.com
+
+steps:
+  # 1. Python 의존성 설치 및 테스트
+  - name: 'python:3.13-slim'
+    id: 'test'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        cd api
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
+        cd ..
+        python -m pytest tests/unit -v --tb=short || true  # 테스트 실패해도 계속 진행 (초기 단계)
+
+  # 2. Docker 이미지 빌드
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}-${BRANCH_NAME}:${COMMIT_SHA}'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}-${BRANCH_NAME}:latest'
+      - '.'
+
+  # 3. Container Registry에 푸시
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push'
+    args:
+      - 'push'
+      - '--all-tags'
+      - 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}-${BRANCH_NAME}'
+
+  # 4. Cloud Run에 배포
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'deploy'
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_SERVICE_NAME}-${BRANCH_NAME}'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}-${BRANCH_NAME}:${COMMIT_SHA}'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--memory'
+      - '512Mi'
+      - '--cpu'
+      - '1'
+      - '--timeout'
+      - '300'
+      - '--max-instances'
+      - '10'
+      - '--min-instances'
+      - '0'
+      - '--port'
+      - '8080'
+      - '--service-account'
+      - '${_SERVICE_ACCOUNT}'
+      - '--set-env-vars'
+      - 'ENVIRONMENT=${BRANCH_NAME},GOOGLE_CLOUD_PROJECT=${PROJECT_ID}'
+
+  # 5. 배포 확인
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'verify'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        SERVICE_URL=$(gcloud run services describe ${_SERVICE_NAME}-${BRANCH_NAME} \
+          --region ${_REGION} \
+          --format 'value(status.url)')
+        echo "서비스 URL: $${SERVICE_URL}"
+        
+        # 헬스 체크
+        curl -f "$${SERVICE_URL}/health" || exit 1
+        echo "배포가 성공적으로 완료되었습니다!"
+
+# 빌드 로그를 Cloud Storage에 저장
+options:
+  logging: GCS_ONLY
+  logsBucket: 'gs://${PROJECT_ID}_cloudbuild_logs'
+
+# 빌드 시간 제한
+timeout: '1200s'  # 20분

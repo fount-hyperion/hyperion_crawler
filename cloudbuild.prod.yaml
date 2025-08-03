@@ -1,0 +1,98 @@
+# Production 환경 전용 Cloud Build 설정
+# main 브랜치에만 적용
+
+substitutions:
+  _SERVICE_NAME: hyperion-crawler-prod
+  _REGION: asia-northeast3
+  _SERVICE_ACCOUNT: hyperion-crawler@${PROJECT_ID}.iam.gserviceaccount.com
+
+steps:
+  # 1. Python 의존성 설치 및 테스트 (Production은 테스트 필수)
+  - name: 'python:3.13-slim'
+    id: 'test'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        cd api
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
+        cd ..
+        python -m pytest tests/unit -v --tb=short
+
+  # 2. Docker 이미지 빌드
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}:${COMMIT_SHA}'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}:latest'
+      - '.'
+
+  # 3. Container Registry에 푸시
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push'
+    args:
+      - 'push'
+      - '--all-tags'
+      - 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}'
+
+  # 4. Cloud Run에 배포 (Production 설정)
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'deploy'
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_SERVICE_NAME}'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}:${COMMIT_SHA}'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'  # 필요시 --no-allow-unauthenticated로 변경
+      - '--memory'
+      - '1Gi'  # Production은 메모리 증가
+      - '--cpu'
+      - '2'    # Production은 CPU 증가
+      - '--timeout'
+      - '300'
+      - '--max-instances'
+      - '50'   # Production은 최대 인스턴스 증가
+      - '--min-instances'
+      - '1'    # Production은 최소 1개 인스턴스 유지
+      - '--port'
+      - '8080'
+      - '--service-account'
+      - '${_SERVICE_ACCOUNT}'
+      - '--set-env-vars'
+      - 'ENVIRONMENT=production,GOOGLE_CLOUD_PROJECT=${PROJECT_ID}'
+
+  # 5. 배포 확인 및 알림
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'verify'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        SERVICE_URL=$(gcloud run services describe ${_SERVICE_NAME} \
+          --region ${_REGION} \
+          --format 'value(status.url)')
+        echo "Production 서비스 URL: $${SERVICE_URL}"
+        
+        # 헬스 체크
+        curl -f "$${SERVICE_URL}/health" || exit 1
+        echo "Production 배포가 성공적으로 완료되었습니다!"
+        
+        # TODO: Slack 또는 이메일 알림 추가
+
+# 빌드 로그를 Cloud Storage에 저장
+options:
+  logging: GCS_ONLY
+  logsBucket: 'gs://${PROJECT_ID}_cloudbuild_logs'
+  machineType: 'E2_HIGHCPU_8'  # Production은 더 빠른 빌드를 위해 고성능 머신 사용
+
+# 빌드 시간 제한
+timeout: '1200s'  # 20분

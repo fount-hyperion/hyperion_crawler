@@ -96,49 +96,74 @@ echo ""
 echo -e "${YELLOW}GitHub 연결을 완료한 후 Enter를 눌러주세요...${NC}"
 read -p ""
 
-# 5. Cloud Build 트리거 생성 (API 사용)
-echo -e "${YELLOW}5. Cloud Build 트리거 생성 중...${NC}"
+# 5. 연결된 저장소 확인
+echo -e "${YELLOW}5. 연결된 저장소 확인 중...${NC}"
+CONNECTED_REPOS=$(gcloud builds repositories list --format="value(name)" 2>/dev/null || echo "")
+
+if [ -z "$CONNECTED_REPOS" ]; then
+    echo -e "${RED}연결된 저장소가 없습니다. Console에서 먼저 저장소를 연결해주세요.${NC}"
+    echo "https://console.cloud.google.com/cloud-build/triggers/connect?project=${PROJECT_ID}"
+    exit 1
+fi
+
+echo -e "${GREEN}연결된 저장소:${NC}"
+echo "$CONNECTED_REPOS"
+echo ""
+
+# 저장소 이름 추출 (github_[owner]_[repo] 형식)
+REPO_NAME="github_$(echo ${GITHUB_REPO} | sed 's/\//_/g')"
+if ! echo "$CONNECTED_REPOS" | grep -q "$REPO_NAME"; then
+    echo -e "${YELLOW}경고: ${GITHUB_REPO} 저장소가 연결되지 않았을 수 있습니다.${NC}"
+    echo "연결된 저장소 중 하나를 선택하거나, Console에서 연결을 확인해주세요."
+fi
+
+# 6. Cloud Build 트리거 생성
+echo -e "${YELLOW}6. Cloud Build 트리거 생성 중...${NC}"
 
 # 개발 환경 트리거 생성
 echo "개발 환경 트리거 생성..."
-cat > /tmp/trigger-dev.json <<EOF
-{
-  "name": "hyperion-crawler-dev-trigger",
-  "description": "Hyperion Crawler 개발 환경 자동 배포",
-  "github": {
-    "owner": "$(echo ${GITHUB_REPO} | cut -d'/' -f1)",
-    "name": "$(echo ${GITHUB_REPO} | cut -d'/' -f2)",
-    "push": {
-      "branch": "^develop$"
-    }
-  },
-  "filename": "cloudbuild.yaml",
-  "substitutions": {
-    "_ENVIRONMENT": "dev"
-  }
-}
-EOF
-
-gcloud builds triggers create github \
-    --repo-name=$(echo ${GITHUB_REPO} | cut -d'/' -f2) \
-    --repo-owner=$(echo ${GITHUB_REPO} | cut -d'/' -f1) \
+gcloud builds triggers create \
+    --region=${REGION} \
+    --name="hyperion-crawler-dev" \
+    --repository="projects/${PROJECT_ID}/locations/${REGION}/connections/github/repositories/${REPO_NAME}" \
     --branch-pattern="^develop$" \
     --build-config="cloudbuild.yaml" \
     --description="Hyperion Crawler 개발 환경 자동 배포" \
-    --substitutions="_ENVIRONMENT=dev"
+    --substitutions="_ENVIRONMENT=dev" \
+    2>/dev/null || {
+        echo -e "${YELLOW}새로운 API 형식 실패, 기존 방식으로 재시도...${NC}"
+        gcloud builds triggers create github \
+            --name="hyperion-crawler-dev" \
+            --repo-name="hyperion_crawler" \
+            --branch-pattern="^develop$" \
+            --build-config="cloudbuild.yaml" \
+            --description="Hyperion Crawler 개발 환경 자동 배포" \
+            --substitutions="_ENVIRONMENT=dev"
+    }
 
 # 프로덕션 환경 트리거 생성
 echo "프로덕션 환경 트리거 생성..."
-gcloud builds triggers create github \
-    --repo-name=$(echo ${GITHUB_REPO} | cut -d'/' -f2) \
-    --repo-owner=$(echo ${GITHUB_REPO} | cut -d'/' -f1) \
+gcloud builds triggers create \
+    --region=${REGION} \
+    --name="hyperion-crawler-prod" \
+    --repository="projects/${PROJECT_ID}/locations/${REGION}/connections/github/repositories/${REPO_NAME}" \
     --branch-pattern="^main$" \
     --build-config="cloudbuild.prod.yaml" \
     --description="Hyperion Crawler 프로덕션 환경 자동 배포" \
-    --substitutions="_ENVIRONMENT=prod"
+    --substitutions="_ENVIRONMENT=prod" \
+    2>/dev/null || {
+        echo -e "${YELLOW}새로운 API 형식 실패, 기존 방식으로 재시도...${NC}"
+        gcloud builds triggers create github \
+            --name="hyperion-crawler-prod" \
+            --repo-name="hyperion_crawler" \
+            --branch-pattern="^main$" \
+            --build-config="cloudbuild.prod.yaml" \
+            --description="Hyperion Crawler 프로덕션 환경 자동 배포" \
+            --substitutions="_ENVIRONMENT=prod"
+    }
 
-# 6. 빌드 로그 버킷 생성
-echo -e "${YELLOW}6. 빌드 로그 버킷 생성 중...${NC}"
+# 7. 빌드 로그 버킷 생성
+echo -e "${YELLOW}7. 빌드 로그 버킷 생성 중...${NC}"
 LOGS_BUCKET="${PROJECT_ID}_cloudbuild_logs"
 if ! gsutil ls -b gs://${LOGS_BUCKET} &>/dev/null; then
     gsutil mb -p ${PROJECT_ID} -l ${REGION} gs://${LOGS_BUCKET}
@@ -147,7 +172,7 @@ else
     echo -e "${GREEN}✓ 로그 버킷이 이미 존재합니다${NC}"
 fi
 
-# 7. 설정 확인
+# 8. 설정 확인
 echo ""
 echo -e "${GREEN}=== Cloud Build CI/CD 설정 완료 ===${NC}"
 echo ""

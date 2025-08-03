@@ -1,0 +1,77 @@
+name: Deploy Crawler and Workflow
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'api/**'
+      - 'workflows/**'
+      - '.github/workflows/deploy-crawler.yml'
+
+env:
+  PROJECT_ID: ${{ github.ref == 'refs/heads/main' && 'prod-hyperion-kaidra' || 'dev-hyperion-kaidra' }}
+  ENVIRONMENT: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
+  REGION: asia-northeast3
+  SERVICE_NAME: hyperion-crawler
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      id-token: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+      
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+      
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker ${REGION}-docker.pkg.dev
+      
+      - name: Build and Push Docker Image
+        run: |
+          IMAGE_URL="${REGION}-docker.pkg.dev/${PROJECT_ID}/hyperion-backend-${ENVIRONMENT}/${SERVICE_NAME}:${GITHUB_SHA}"
+          
+          cd api
+          docker build -t ${IMAGE_URL} .
+          docker push ${IMAGE_URL}
+      
+      - name: Deploy to Cloud Run
+        run: |
+          IMAGE_URL="${REGION}-docker.pkg.dev/${PROJECT_ID}/hyperion-backend-${ENVIRONMENT}/${SERVICE_NAME}:${GITHUB_SHA}"
+          
+          gcloud run deploy ${SERVICE_NAME}-${ENVIRONMENT} \
+            --image=${IMAGE_URL} \
+            --region=${REGION} \
+            --platform=managed \
+            --no-allow-unauthenticated \
+            --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID}"
+      
+      - name: Deploy Workflow
+        if: ${{ contains(github.event.head_commit.modified, 'workflows/') || github.event.forced }}
+        run: |
+          WORKFLOW_NAME="krx-daily-crawl-${ENVIRONMENT}"
+          
+          # Get Cloud Run service URL
+          SERVICE_URL=$(gcloud run services describe ${SERVICE_NAME}-${ENVIRONMENT} \
+            --region=${REGION} \
+            --format='value(status.url)')
+          
+          # Deploy workflow with environment variables
+          gcloud workflows deploy ${WORKFLOW_NAME} \
+            --location=${REGION} \
+            --source=workflows/krx_daily_crawl.yaml \
+            --set-env-vars=CRAWLER_API_URL=${SERVICE_URL}
+          
+          echo "Workflow deployed: ${WORKFLOW_NAME}"

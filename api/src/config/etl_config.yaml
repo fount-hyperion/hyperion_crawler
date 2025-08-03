@@ -1,0 +1,155 @@
+# ETL 설정 파일
+# 각 데이터 소스별 ETL 파이프라인 설정
+
+sources:
+  krx:
+    description: "Korea Exchange (한국거래소) 주식 시장 데이터"
+    enabled: true
+    
+    extractor:
+      class: "KRXExtractor"
+      params:
+        markets: ["KOSPI", "KOSDAQ"]
+        retry_count: 3
+        timeout: 300
+    
+    transformer:
+      class: "KRXTransformer"
+      default_rules:
+        calculate_change_amount: true
+        calculate_trading_value: true
+        validate_price_logic: true
+      
+      # 필드 매핑은 코드에서 처리 (복잡한 로직)
+      
+    loader:
+      class: "KRXLoader"
+      target_table: "krs_daily_prices"
+      default_mode: "upsert"
+      batch_size: 1000
+      config:
+        update_latest_prices: true
+        handle_holidays: true
+    
+    schedule:
+      cron: "0 18 * * 1-5"  # 평일 오후 6시
+      timezone: "Asia/Seoul"
+    
+    monitoring:
+      alerts:
+        - type: "data_quality"
+          threshold: 0.95  # 95% 이상 성공률
+        - type: "latency"
+          threshold: 600   # 10분 이내 완료
+
+  dart:
+    description: "DART (전자공시시스템) 기업 공시 데이터"
+    enabled: false  # 아직 구현 안됨
+    
+    extractor:
+      class: "DARTExtractor"
+      params:
+        api_key: "${DART_API_KEY}"  # 환경변수에서 읽기
+        report_types: ["A001", "A002", "A003"]  # 사업보고서, 반기보고서, 분기보고서
+    
+    transformer:
+      class: "DARTTransformer"
+      default_rules:
+        parse_xbrl: true
+        extract_financial_statements: true
+        normalize_account_names: true
+    
+    loader:
+      class: "DARTLoader"
+      target_table: "dart_filings"
+      default_mode: "insert"
+      config:
+        store_raw_filing: true
+        storage_backend: "gcs"  # Google Cloud Storage
+
+  sec:
+    description: "SEC EDGAR 미국 기업 공시 데이터"
+    enabled: false
+    
+    extractor:
+      class: "SECExtractor"
+      params:
+        user_agent: "${SEC_USER_AGENT}"
+        form_types: ["10-K", "10-Q", "8-K", "DEF 14A"]
+    
+    transformer:
+      class: "SECTransformer"
+      default_rules:
+        parse_xbrl: true
+        extract_financial_data: true
+        convert_currency: false  # USD 그대로 유지
+    
+    loader:
+      class: "SECLoader"
+      target_table: "sec_filings"
+      default_mode: "upsert"
+
+  tipranks:
+    description: "TipRanks 애널리스트 평가 데이터"
+    enabled: false
+    
+    extractor:
+      class: "TipRanksExtractor"
+      params:
+        data_types: ["analyst_ratings", "price_targets", "insider_trades"]
+        max_symbols_per_batch: 50
+    
+    transformer:
+      class: "TipRanksTransformer"
+      default_rules:
+        normalize_ratings: true
+        calculate_consensus: true
+        convert_price_targets_to_krw: true
+    
+    loader:
+      class: "TipRanksLoader"
+      target_table: "analyst_ratings"
+      default_mode: "upsert"
+      config:
+        update_consensus_table: true
+
+  investing:
+    description: "Investing.com 글로벌 시장 데이터"
+    enabled: false
+    
+    extractor:
+      class: "InvestingExtractor"
+      params:
+        data_types: ["indices", "commodities", "currencies"]
+        countries: ["united states", "south korea", "japan", "china"]
+    
+    transformer:
+      class: "InvestingTransformer"
+      default_rules:
+        normalize_symbols: true
+        convert_units: true
+        calculate_returns: true
+    
+    loader:
+      class: "InvestingLoader"
+      target_table: "global_market_data"
+      default_mode: "upsert"
+
+# 공통 설정
+common:
+  error_handling:
+    max_retries: 3
+    retry_delay: 60  # seconds
+    dead_letter_queue: true
+    
+  monitoring:
+    metrics_enabled: true
+    logging_level: "INFO"
+    
+  data_quality:
+    enable_validation: true
+    validation_sampling_rate: 1.0  # 100% 검증
+    
+  performance:
+    parallel_workers: 4
+    connection_pool_size: 20

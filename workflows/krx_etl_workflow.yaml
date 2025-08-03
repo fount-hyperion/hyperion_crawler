@@ -1,0 +1,328 @@
+main:
+  params: [args]
+  steps:
+    - init:
+        assign:
+          - api_url: ${sys.get_env("CRAWLER_API_URL")}
+          - trade_date: ${default(map.get(args, "trade_date"), "")}
+          - execution_id: ${sys.get_env("GOOGLE_CLOUD_WORKFLOW_EXECUTION_ID")}
+          - project_id: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
+          - task_id: ${"krx_etl_" + text.substring(execution_id, 0, 8) + "_" + sys.now()}
+    
+    - validate_api_url:
+        switch:
+          - condition: ${api_url == ""}
+            raise:
+              code: 400
+              message: "CRAWLER_API_URL environment variable is not set"
+    
+    - log_start:
+        call: sys.log
+        args:
+          text: ${"Starting KRX ETL workflow"}
+          severity: "INFO"
+          data:
+            execution_id: ${execution_id}
+            task_id: ${task_id}
+            trade_date: ${trade_date}
+    
+    # E - Extract Phase
+    - extract_data:
+        try:
+          call: http.post
+          args:
+            url: ${api_url + "/api/v1/etl/extract/krx"}
+            body:
+              trade_date: ${trade_date}
+            auth:
+              type: OAuth2
+            timeout: 300  # 5분 타임아웃
+          result: extract_response
+        retry:
+          predicate: ${http_retry_predicate}
+          max_retries: 3
+          backoff:
+            initial_delay: 5
+            max_delay: 60
+            multiplier: 2
+        except:
+          as: e
+          steps:
+            - log_extract_error:
+                call: sys.log
+                args:
+                  text: "Failed to extract data from KRX"
+                  severity: "ERROR"
+                  data:
+                    error: ${e}
+                    task_id: ${task_id}
+            - publish_error_event:
+                call: publish_event
+                args:
+                  event_type: "etl.extract.failed"
+                  phase: "extract"
+                  error: ${e}
+                  task_id: ${task_id}
+            - raise_error:
+                raise: ${e}
+    
+    - check_extract_result:
+        switch:
+          - condition: ${extract_response.body.status != "success"}
+            steps:
+              - log_extract_failure:
+                  call: sys.log
+                  args:
+                    text: "Extract phase failed"
+                    severity: "ERROR"
+                    data:
+                      response: ${extract_response.body}
+              - return_extract_failure:
+                  return:
+                    status: "failed"
+                    phase: "extract"
+                    task_id: ${task_id}
+                    error: "Extract phase failed"
+    
+    - log_extract_success:
+        call: sys.log
+        args:
+          text: "Extract phase completed successfully"
+          severity: "INFO"
+          data:
+            task_id: ${extract_response.body.task_id}
+            items_extracted: ${extract_response.body.items_extracted}
+            metadata: ${extract_response.body.metadata}
+    
+    # T - Transform Phase
+    - transform_data:
+        try:
+          call: http.post
+          args:
+            url: ${api_url + "/api/v1/etl/transform/krx"}
+            body:
+              task_id: ${extract_response.body.task_id}
+              data: ${extract_response.body.data}
+              rules:
+                calculate_change_amount: true
+                calculate_trading_value: true
+            auth:
+              type: OAuth2
+            timeout: 300  # 5분 타임아웃
+          result: transform_response
+        retry:
+          predicate: ${http_retry_predicate}
+          max_retries: 2
+          backoff:
+            initial_delay: 5
+            max_delay: 30
+            multiplier: 2
+        except:
+          as: e
+          steps:
+            - log_transform_error:
+                call: sys.log
+                args:
+                  text: "Failed to transform data"
+                  severity: "ERROR"
+                  data:
+                    error: ${e}
+                    task_id: ${task_id}
+            - publish_error_event:
+                call: publish_event
+                args:
+                  event_type: "etl.transform.failed"
+                  phase: "transform"
+                  error: ${e}
+                  task_id: ${task_id}
+            - raise_error:
+                raise: ${e}
+    
+    - check_transform_result:
+        switch:
+          - condition: ${transform_response.body.status != "success"}
+            steps:
+              - log_transform_failure:
+                  call: sys.log
+                  args:
+                    text: "Transform phase failed"
+                    severity: "ERROR"
+                    data:
+                      response: ${transform_response.body}
+              - return_transform_failure:
+                  return:
+                    status: "failed"
+                    phase: "transform"
+                    task_id: ${task_id}
+                    error: "Transform phase failed"
+    
+    - log_transform_success:
+        call: sys.log
+        args:
+          text: "Transform phase completed successfully"
+          severity: "INFO"
+          data:
+            task_id: ${transform_response.body.task_id}
+            items_transformed: ${transform_response.body.items_transformed}
+    
+    # L - Load Phase
+    - load_data:
+        try:
+          call: http.post
+          args:
+            url: ${api_url + "/api/v1/etl/load/krx"}
+            body:
+              task_id: ${transform_response.body.task_id}
+              target: "krs_daily_prices"
+              data: ${transform_response.body.data}
+              mode: "upsert"
+            auth:
+              type: OAuth2
+            timeout: 600  # 10분 타임아웃
+          result: load_response
+        retry:
+          predicate: ${http_retry_predicate}
+          max_retries: 2
+          backoff:
+            initial_delay: 5
+            max_delay: 30
+            multiplier: 2
+        except:
+          as: e
+          steps:
+            - log_load_error:
+                call: sys.log
+                args:
+                  text: "Failed to load data"
+                  severity: "ERROR"
+                  data:
+                    error: ${e}
+                    task_id: ${task_id}
+            - publish_error_event:
+                call: publish_event
+                args:
+                  event_type: "etl.load.failed"
+                  phase: "load"
+                  error: ${e}
+                  task_id: ${task_id}
+            - raise_error:
+                raise: ${e}
+    
+    - check_load_result:
+        switch:
+          - condition: ${load_response.body.status != "success"}
+            steps:
+              - log_load_failure:
+                  call: sys.log
+                  args:
+                    text: "Load phase failed"
+                    severity: "ERROR"
+                    data:
+                      response: ${load_response.body}
+              - return_load_failure:
+                  return:
+                    status: "failed"
+                    phase: "load"
+                    task_id: ${task_id}
+                    error: "Load phase failed"
+    
+    - log_load_success:
+        call: sys.log
+        args:
+          text: "Load phase completed successfully"
+          severity: "INFO"
+          data:
+            task_id: ${load_response.body.task_id}
+            items_loaded: ${load_response.body.items_loaded}
+            items_failed: ${load_response.body.items_failed}
+    
+    # Publish success event
+    - publish_success_event:
+        call: publish_event
+        args:
+          event_type: "etl.completed"
+          phase: "completed"
+          error: null
+          task_id: ${task_id}
+          summary:
+            extracted: ${extract_response.body.items_extracted}
+            transformed: ${transform_response.body.items_transformed}
+            loaded: ${load_response.body.items_loaded}
+            failed: ${load_response.body.items_failed}
+            trade_date: ${extract_response.body.metadata.trade_date}
+    
+    - return_success:
+        return:
+          status: "success"
+          execution_id: ${execution_id}
+          task_id: ${task_id}
+          summary:
+            extracted: ${extract_response.body.items_extracted}
+            transformed: ${transform_response.body.items_transformed}
+            loaded: ${load_response.body.items_loaded}
+            failed: ${load_response.body.items_failed}
+            trade_date: ${extract_response.body.metadata.trade_date}
+
+# HTTP 재시도 조건
+http_retry_predicate:
+  params: [e]
+  steps:
+    - check_retry:
+        return: ${e.code == 429 or e.code == 500 or e.code == 502 or e.code == 503 or e.code == 504}
+
+# 이벤트 발행 서브루틴
+publish_event:
+  params: [event_type, phase, error, task_id, summary]
+  steps:
+    - get_project_id:
+        assign:
+          - project_id: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
+    
+    - create_event_data:
+        assign:
+          - event_data:
+              event_type: ${event_type}
+              crawler_type: "krx"
+              phase: ${phase}
+              task_id: ${task_id}
+              timestamp: ${sys.now()}
+              execution_id: ${sys.get_env("GOOGLE_CLOUD_WORKFLOW_EXECUTION_ID")}
+        
+    - add_error_if_exists:
+        switch:
+          - condition: ${error != null}
+            assign:
+              - event_data.error: ${error}
+          
+    - add_summary_if_exists:
+        switch:
+          - condition: ${default(summary, null) != null}
+            assign:
+              - event_data.summary: ${summary}
+    
+    - publish_to_pubsub:
+        try:
+          call: http.post
+          args:
+            url: ${"https://pubsub.googleapis.com/v1/projects/" + project_id + "/topics/etl-events:publish"}
+            auth:
+              type: OAuth2
+            body:
+              messages:
+                - data: ${base64.encode(json.encode(event_data))}
+                  attributes:
+                    event_type: ${event_type}
+                    crawler_type: "krx"
+                    phase: ${phase}
+                    task_id: ${task_id}
+        except:
+          as: e
+          steps:
+            - log_pubsub_error:
+                call: sys.log
+                args:
+                  text: "Failed to publish event to Pub/Sub"
+                  severity: "WARNING"
+                  data:
+                    error: ${e}
+                    event_type: ${event_type}

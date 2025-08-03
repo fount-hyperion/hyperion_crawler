@@ -1,0 +1,56 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.pytest_cache/
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+tests/
+docs/
+scripts/
+workflows/
+cloudbuild*.yaml
+Dockerfile
+.dockerignore
+README.md
+claude.md
+*.md
+.github/
+.env
+.env.*
+
+# Build artifacts
+build/
+dist/
+*.egg-info/

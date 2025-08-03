@@ -1,7 +1,16 @@
-# Cloud Build 설정 가이드
+# Cloud Build CI/CD 설정 가이드
 
 ## 개요
-이 문서는 Hyperion Crawler의 Cloud Build를 통한 자동 배포 설정 방법을 설명합니다.
+이 문서는 Hyperion Crawler의 Cloud Build를 통한 CI/CD 파이프라인 설정 방법을 설명합니다.
+
+## 빠른 시작
+```bash
+# 자동 설정 스크립트 실행
+./scripts/setup-cloud-build.sh [프로젝트ID] [GitHub저장소]
+
+# 예시
+./scripts/setup-cloud-build.sh hyperion-dev-project username/hyperion_crawler
+```
 
 ## 사전 준비사항
 
@@ -120,3 +129,32 @@ cloud-build-local --config=cloudbuild.yaml --dryrun=false .
 1. **Cloud Build 대시보드**: 빌드 성공률 및 소요 시간
 2. **Cloud Run 메트릭**: 요청 수, 레이턴시, 에러율
 3. **로그 기반 메트릭**: 커스텀 알림 설정 가능
+
+## CI/CD 파이프라인 특징
+
+### 빌드 최적화
+- **Docker 캐시**: 이전 빌드 이미지 재사용으로 빌드 시간 단축
+- **멀티 스테이지 빌드**: 최종 이미지 크기 최소화
+- **병렬 처리**: 가능한 작업은 병렬로 실행
+
+### 보안 강화
+- **비루트 사용자**: 컨테이너 실행 시 보안 강화
+- **Secret Manager**: 민감한 정보 안전하게 관리
+- **최소 권한 원칙**: 필요한 권한만 부여
+
+### 알림 시스템
+- **Slack 통합**: 빌드 성공/실패 시 알림
+- **Pub/Sub**: 이벤트 기반 알림 확장 가능
+
+## 수동 빌드 실행
+
+```bash
+# 특정 브랜치에서 수동 빌드 트리거
+gcloud builds submit --config=cloudbuild.yaml \
+  --substitutions=BRANCH_NAME=develop
+
+# 로컬에서 Cloud Build 테스트
+cloud-build-local --config=cloudbuild.yaml \
+  --substitutions=BRANCH_NAME=develop \
+  --dryrun=false .
+```

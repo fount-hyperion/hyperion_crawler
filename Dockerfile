@@ -15,13 +15,13 @@ RUN apt-get update && apt-get install -y \
 COPY api/requirements.txt .
 
 # Build argument로 GitHub 토큰 받기
-ARG GITHUB_TOKEN
+ARG GH_TOKEN
 
 # 모든 의존성 설치
-RUN if [ -n "$GITHUB_TOKEN" ]; then \
+RUN if [ -n "$GH_TOKEN" ]; then \
         echo "Installing with GitHub authentication..."; \
         # Git config로 HTTPS URL을 토큰 포함 URL로 자동 변환
-        git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/" && \
+        git config --global url."https://${GH_TOKEN}@github.com/".insteadOf "https://github.com/" && \
         # Kardia 최신 버전 설치 (main 브랜치)
         pip install --user --no-cache-dir git+https://github.com/fount-hyperion/kardia.git@main && \
         # 나머지 패키지 설치

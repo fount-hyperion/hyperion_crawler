@@ -1,0 +1,38 @@
+# KRX 일일 데이터 수집 워크플로우
+main:
+  params: [args]
+  steps:
+    # 1. KRX 주식 시장 데이터 수집
+    - call_krx_stocks:
+        call: http.post
+        args:
+          url: https://hyperion-crawler-dev-qg56z3pouq-du.a.run.app/api/v1/etl/krx/stocks
+          auth:
+            type: OIDC
+          body:
+            date: ${args.date}
+            mode: ${default(args.mode, "daily")}
+          timeout: 600  # 10분
+        result: krx_stocks_response
+    
+    # 2. KRX 지수 데이터 수집
+    - call_krx_indices:
+        call: http.post
+        args:
+          url: https://hyperion-crawler-dev-qg56z3pouq-du.a.run.app/api/v1/etl/krx/indices
+          auth:
+            type: OIDC
+          body:
+            date: ${args.date}
+            mode: ${default(args.mode, "daily")}
+          timeout: 300  # 5분
+        result: krx_indices_response
+    
+    # 3. 결과 반환
+    - return_result:
+        return:
+          status: "success"
+          results:
+            stocks: ${krx_stocks_response}
+            indices: ${krx_indices_response}
+          timestamp: ${sys.now()}

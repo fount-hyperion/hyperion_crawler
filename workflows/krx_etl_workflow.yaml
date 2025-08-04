@@ -19,12 +19,12 @@ main:
     - log_start:
         call: sys.log
         args:
-          text: ${"Starting KRX ETL workflow"}
-          severity: "INFO"
           data:
+            message: "Starting KRX ETL workflow"
             execution_id: ${execution_id}
             task_id: ${task_id}
             trade_date: ${trade_date}
+          severity: "INFO"
     
     # E - Extract Phase
     - extract_data:
@@ -35,7 +35,7 @@ main:
             body:
               trade_date: ${trade_date}
             auth:
-              type: OAuth2
+              type: OIDC
             timeout: 300  # 5분 타임아웃
           result: extract_response
         retry:
@@ -51,19 +51,20 @@ main:
             - log_extract_error:
                 call: sys.log
                 args:
-                  text: "Failed to extract data from KRX"
-                  severity: "ERROR"
                   data:
+                    message: "Failed to extract data from KRX"
                     error: ${e}
                     task_id: ${task_id}
-            - publish_error_event:
+                  severity: "ERROR"
+            - publish_extract_error_event:
                 call: publish_event
                 args:
                   event_type: "etl.extract.failed"
                   phase: "extract"
                   error: ${e}
                   task_id: ${task_id}
-            - raise_error:
+                  summary: null
+            - raise_extract_error:
                 raise: ${e}
     
     - check_extract_result:
@@ -73,10 +74,10 @@ main:
               - log_extract_failure:
                   call: sys.log
                   args:
-                    text: "Extract phase failed"
-                    severity: "ERROR"
                     data:
+                      message: "Extract phase failed"
                       response: ${extract_response.body}
+                    severity: "ERROR"
               - return_extract_failure:
                   return:
                     status: "failed"
@@ -87,12 +88,12 @@ main:
     - log_extract_success:
         call: sys.log
         args:
-          text: "Extract phase completed successfully"
-          severity: "INFO"
           data:
+            message: "Extract phase completed successfully"
             task_id: ${extract_response.body.task_id}
             items_extracted: ${extract_response.body.items_extracted}
             metadata: ${extract_response.body.metadata}
+          severity: "INFO"
     
     # T - Transform Phase
     - transform_data:
@@ -107,7 +108,7 @@ main:
                 calculate_change_amount: true
                 calculate_trading_value: true
             auth:
-              type: OAuth2
+              type: OIDC
             timeout: 300  # 5분 타임아웃
           result: transform_response
         retry:
@@ -123,19 +124,20 @@ main:
             - log_transform_error:
                 call: sys.log
                 args:
-                  text: "Failed to transform data"
-                  severity: "ERROR"
                   data:
+                    message: "Failed to transform data"
                     error: ${e}
                     task_id: ${task_id}
-            - publish_error_event:
+                  severity: "ERROR"
+            - publish_transform_error_event:
                 call: publish_event
                 args:
                   event_type: "etl.transform.failed"
                   phase: "transform"
                   error: ${e}
                   task_id: ${task_id}
-            - raise_error:
+                  summary: null
+            - raise_transform_error:
                 raise: ${e}
     
     - check_transform_result:
@@ -145,10 +147,10 @@ main:
               - log_transform_failure:
                   call: sys.log
                   args:
-                    text: "Transform phase failed"
-                    severity: "ERROR"
                     data:
+                      message: "Transform phase failed"
                       response: ${transform_response.body}
+                    severity: "ERROR"
               - return_transform_failure:
                   return:
                     status: "failed"
@@ -159,11 +161,11 @@ main:
     - log_transform_success:
         call: sys.log
         args:
-          text: "Transform phase completed successfully"
-          severity: "INFO"
           data:
+            message: "Transform phase completed successfully"
             task_id: ${transform_response.body.task_id}
             items_transformed: ${transform_response.body.items_transformed}
+          severity: "INFO"
     
     # L - Load Phase
     - load_data:
@@ -177,7 +179,7 @@ main:
               data: ${transform_response.body.data}
               mode: "upsert"
             auth:
-              type: OAuth2
+              type: OIDC
             timeout: 600  # 10분 타임아웃
           result: load_response
         retry:
@@ -193,19 +195,20 @@ main:
             - log_load_error:
                 call: sys.log
                 args:
-                  text: "Failed to load data"
-                  severity: "ERROR"
                   data:
+                    message: "Failed to load data"
                     error: ${e}
                     task_id: ${task_id}
-            - publish_error_event:
+                  severity: "ERROR"
+            - publish_load_error_event:
                 call: publish_event
                 args:
                   event_type: "etl.load.failed"
                   phase: "load"
                   error: ${e}
                   task_id: ${task_id}
-            - raise_error:
+                  summary: null
+            - raise_load_error:
                 raise: ${e}
     
     - check_load_result:
@@ -215,10 +218,10 @@ main:
               - log_load_failure:
                   call: sys.log
                   args:
-                    text: "Load phase failed"
-                    severity: "ERROR"
                     data:
+                      message: "Load phase failed"
                       response: ${load_response.body}
+                    severity: "ERROR"
               - return_load_failure:
                   return:
                     status: "failed"
@@ -229,12 +232,12 @@ main:
     - log_load_success:
         call: sys.log
         args:
-          text: "Load phase completed successfully"
-          severity: "INFO"
           data:
+            message: "Load phase completed successfully"
             task_id: ${load_response.body.task_id}
             items_loaded: ${load_response.body.items_loaded}
             items_failed: ${load_response.body.items_failed}
+          severity: "INFO"
     
     # Publish success event
     - publish_success_event:
@@ -268,7 +271,7 @@ http_retry_predicate:
   params: [e]
   steps:
     - check_retry:
-        return: ${e.code == 429 or e.code == 500 or e.code == 502 or e.code == 503 or e.code == 504}
+        return: ${"code" in e and (e.code == 429 or e.code == 500 or e.code == 502 or e.code == 503 or e.code == 504)}
 
 # 이벤트 발행 서브루틴
 publish_event:
@@ -306,7 +309,7 @@ publish_event:
           args:
             url: ${"https://pubsub.googleapis.com/v1/projects/" + project_id + "/topics/etl-events:publish"}
             auth:
-              type: OAuth2
+              type: OIDC
             body:
               messages:
                 - data: ${base64.encode(json.encode(event_data))}
@@ -321,8 +324,8 @@ publish_event:
             - log_pubsub_error:
                 call: sys.log
                 args:
-                  text: "Failed to publish event to Pub/Sub"
-                  severity: "WARNING"
                   data:
+                    message: "Failed to publish event to Pub/Sub"
                     error: ${e}
                     event_type: ${event_type}
+                  severity: "WARNING"

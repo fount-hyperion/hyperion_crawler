@@ -28,8 +28,8 @@ steps:
         python3.13 -m pip install --upgrade pip
         
         # GitHub 토큰으로 Git 설정
-        GH_TOKEN=$(gcloud secrets versions access latest --secret="hyperion-github-token")
-        git config --global url."https://${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+        GH_PAT=$(gcloud secrets versions access latest --secret="hyperion-github-token")
+        git config --global url."https://$${GH_PAT}@github.com/".insteadOf "https://github.com/"
         
         cd api
         # Kardia 및 의존성 설치
@@ -70,12 +70,12 @@ steps:
       - '-c'
       - |
         # workspace에서 GitHub 토큰 읽기
-        GH_TOKEN=$(cat /workspace/github_token.txt)
+        GH_PAT=$(cat /workspace/github_token.txt)
         
         # Docker 빌드 실행 (build-arg로 GitHub 토큰 전달)
         docker build \
           --cache-from ${_REGION}-docker.pkg.dev/$PROJECT_ID/hyperion-containers-dev/${_SERVICE_NAME}-${BRANCH_NAME}:latest \
-          --build-arg GH_TOKEN="$${GH_TOKEN}" \
+          --build-arg GH_TOKEN="$${GH_PAT}" \
           -t ${_REGION}-docker.pkg.dev/$PROJECT_ID/hyperion-containers-dev/${_SERVICE_NAME}-${BRANCH_NAME}:${COMMIT_SHA} \
           -t ${_REGION}-docker.pkg.dev/$PROJECT_ID/hyperion-containers-dev/${_SERVICE_NAME}-${BRANCH_NAME}:latest \
           . || { touch /workspace/.build_failed; exit 1; }

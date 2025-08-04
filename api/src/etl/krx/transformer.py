@@ -162,6 +162,7 @@ class KRXTransformer(MarketDataTransformer):
             
             self.db.add_all(new_assets)
             await self.db.flush()
+            await self.db.commit()
             self.logger.info(f"Added {len(new_assets)} new assets: {new_symbols}")
         
         # 2. 상장폐지 종목 처리
@@ -174,6 +175,7 @@ class KRXTransformer(MarketDataTransformer):
                     asset.updated_by = "SYS_WORKFLOW"
                     asset.updated_at = datetime.now()
             await self.db.flush()
+            await self.db.commit()
             self.logger.info(f"Marked {len(delisted_symbols)} assets as inactive: {delisted_symbols}")
         
         # 3. 활성 종목들 캐싱

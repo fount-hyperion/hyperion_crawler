@@ -154,7 +154,9 @@ class KRXTransformer(MarketDataTransformer):
                     country_code="KR",
                     currency="KRW",
                     is_active=True,
+                    created_by="SYS_WORKFLOW",
                     created_at=datetime.now(),
+                    updated_by="SYS_WORKFLOW",
                     updated_at=datetime.now()
                 ))
             
@@ -169,6 +171,7 @@ class KRXTransformer(MarketDataTransformer):
             for asset in db_assets:
                 if asset.symbol in delisted_symbols:
                     asset.is_active = False
+                    asset.updated_by = "SYS_WORKFLOW"
                     asset.updated_at = datetime.now()
             await self.db.flush()
             self.logger.info(f"Marked {len(delisted_symbols)} assets as inactive: {delisted_symbols}")

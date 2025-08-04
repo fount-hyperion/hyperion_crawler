@@ -4,6 +4,8 @@ KRX (Korea Exchange) 데이터 변환기
 from typing import Dict, Any, List, Optional
 import logging
 from datetime import datetime
+import redis
+import json
 
 from ..base import MarketDataTransformer
 from kardia.unique_key import UniqueKey
@@ -17,11 +19,13 @@ logger = logging.getLogger(__name__)
 class KRXTransformer(MarketDataTransformer):
     """KRX 데이터 변환기"""
     
-    def __init__(self, db_session: AsyncSession, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, db_session: AsyncSession, redis_client: Optional[redis.Redis] = None, config: Optional[Dict[str, Any]] = None):
         super().__init__("krx", config)
         self.db = db_session
         self.unique_key = UniqueKey()
         self._asset_cache = {}  # UUID 캐싱
+        self.redis = redis_client
+        self.cache_ttl = 86400  # 24시간 캐싱
     
     async def transform(self, data: List[Dict[str, Any]], rules: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """
@@ -38,9 +42,18 @@ class KRXTransformer(MarketDataTransformer):
         if not await self.validate_schema(data):
             raise ValueError("Invalid data schema for KRX transformation")
         
+        # 1. Redis 캐시 확인 (당일 자산 목록)
+        today = datetime.now().strftime('%Y%m%d')
+        cache_loaded = await self._load_cache_from_redis(today)
+        
+        if not cache_loaded:
+            # 캐시가 없으면 DB에서 조회하여 캐싱
+            await self._bulk_load_asset_cache(data)
+            await self._save_cache_to_redis(today)
+        
         for item in data:
             try:
-                # AssetMaster UUID 조회/생성
+                # 캐시에서 UUID 가져오기 (이미 로드됨)
                 uuid = await self._get_or_create_asset_uuid(
                     symbol=item['ticker'],
                     name_kr=item['name_kr'],
@@ -94,6 +107,101 @@ class KRXTransformer(MarketDataTransformer):
         
         self.logger.info(f"Transformed {len(transformed_data)} out of {len(data)} records")
         return transformed_data
+    
+    async def _bulk_load_asset_cache(self, data: List[Dict[str, Any]]):
+        """모든 심볼의 AssetMaster를 한 번에 조회하여 캐싱"""
+        # 중복 제거된 심볼 목록 생성
+        symbols = list(set(item['ticker'] for item in data))
+        
+        # 기존 AssetMaster 한 번에 조회
+        result = await self.db.execute(
+            select(AssetMaster).where(
+                and_(
+                    AssetMaster.symbol.in_(symbols),
+                    AssetMaster.country_code == "KR"
+                )
+            )
+        )
+        existing_assets = result.scalars().all()
+        
+        # 캐시에 저장
+        for asset in existing_assets:
+            cache_key = f"{asset.symbol}_{asset.market}"
+            self._asset_cache[cache_key] = asset.uuid
+        
+        # 존재하는 심볼 set
+        existing_symbols = {asset.symbol for asset in existing_assets}
+        
+        # 새로 생성해야 할 자산들 일괄 생성
+        new_assets = []
+        for item in data:
+            if item['ticker'] not in existing_symbols:
+                uuid = self.unique_key.generate("KRS")
+                cache_key = f"{item['ticker']}_{item['market']}"
+                self._asset_cache[cache_key] = uuid
+                
+                new_assets.append(AssetMaster(
+                    uuid=uuid,
+                    asset_type="STOCK",
+                    asset_subtype="DOMESTIC",
+                    symbol=item['ticker'],
+                    name_kr=item['name_kr'],
+                    name_en=None,
+                    market=item['market'],
+                    country_code="KR",
+                    currency="KRW",
+                    is_active=True,
+                    created_at=datetime.now(),
+                    updated_at=datetime.now()
+                ))
+                existing_symbols.add(item['ticker'])
+        
+        # 새 자산들 일괄 저장
+        if new_assets:
+            self.db.add_all(new_assets)
+            await self.db.flush()
+            self.logger.info(f"Created {len(new_assets)} new assets in bulk")
+    
+    async def _load_cache_from_redis(self, date_key: str) -> bool:
+        """
+        Redis에서 당일 AssetMaster 캐시 로드
+        
+        Returns:
+            캐시 로드 성공 여부
+        """
+        if not self.redis:
+            return False
+        
+        try:
+            cache_key = f"krx:asset_master:{date_key}"
+            cached_data = self.redis.get(cache_key)
+            
+            if cached_data:
+                self._asset_cache = json.loads(cached_data)
+                self.logger.info(f"Loaded {len(self._asset_cache)} assets from Redis cache")
+                return True
+        except Exception as e:
+            self.logger.warning(f"Failed to load from Redis cache: {e}")
+        
+        return False
+    
+    async def _save_cache_to_redis(self, date_key: str):
+        """
+        AssetMaster 캐시를 Redis에 저장
+        """
+        if not self.redis:
+            return
+        
+        try:
+            cache_key = f"krx:asset_master:{date_key}"
+            self.redis.setex(
+                cache_key,
+                self.cache_ttl,
+                json.dumps(self._asset_cache)
+            )
+            self.logger.info(f"Saved {len(self._asset_cache)} assets to Redis cache")
+        except Exception as e:
+            self.logger.warning(f"Failed to save to Redis cache: {e}")
     
     async def validate_schema(self, data: List[Dict[str, Any]]) -> bool:
         """KRX 데이터 스키마 검증"""
@@ -149,50 +257,14 @@ class KRXTransformer(MarketDataTransformer):
         }
     
     async def _get_or_create_asset_uuid(self, symbol: str, name_kr: str, market: str) -> str:
-        """AssetMaster UUID 조회 또는 생성"""
-        # 캐시 확인
+        """AssetMaster UUID 조회 (캐시에서만)"""
+        # 캐시 확인 (이미 _bulk_load_asset_cache에서 로드됨)
         cache_key = f"{symbol}_{market}"
         if cache_key in self._asset_cache:
             return self._asset_cache[cache_key]
         
-        # 데이터베이스 조회
-        result = await self.db.execute(
-            select(AssetMaster).where(
-                and_(
-                    AssetMaster.symbol == symbol,
-                    AssetMaster.country_code == "KR"
-                )
-            )
-        )
-        asset = result.scalar_one_or_none()
-        
-        if asset:
-            self._asset_cache[cache_key] = asset.uuid
-            return asset.uuid
-        
-        # 새 자산 생성
-        uuid = self.unique_key.generate("KRS")
-        asset = AssetMaster(
-            uuid=uuid,
-            asset_type="STOCK",
-            asset_subtype="DOMESTIC",
-            symbol=symbol,
-            name_kr=name_kr,
-            name_en=None,  # 추후 업데이트
-            market=market,
-            country_code="KR",
-            currency="KRW",
-            is_active=True,
-            created_at=datetime.now(),
-            updated_at=datetime.now()
-        )
-        self.db.add(asset)
-        await self.db.flush()
-        
-        self._asset_cache[cache_key] = uuid
-        self.logger.info(f"Created new asset: {symbol} ({name_kr}) with UUID: {uuid}")
-        
-        return uuid
+        # 캐시에 없으면 에러 (bulk load에서 처리했어야 함)
+        raise ValueError(f"Asset not found in cache: {symbol} ({market})")
     
     def _validate_transformed_data(self, data: Dict[str, Any]) -> bool:
         """변환된 데이터 유효성 검증"""

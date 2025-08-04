@@ -10,6 +10,11 @@ from typing import Dict, Any, List, Optional
 
 from fastapi import Depends
 from kardia.db import PostgresDB, get_postgres_db
+try:
+    from kardia.db import RedisDB, get_redis_db
+except ImportError:
+    RedisDB = None
+    get_redis_db = None
 
 from ..etl import (
     # KRX
@@ -30,8 +35,9 @@ logger = logging.getLogger(__name__)
 class ETLService:
     """ETL 서비스 - 설정 기반 ETL 파이프라인 관리"""
     
-    def __init__(self, postgres_db: PostgresDB, config_path: Optional[str] = None):
+    def __init__(self, postgres_db: PostgresDB, redis_db: Optional[RedisDB] = None, config_path: Optional[str] = None):
         self.postgres_db = postgres_db
+        self.redis_db = redis_db
         self.config = self._load_config(config_path)
         
         # ETL 컴포넌트 레지스트리
@@ -122,7 +128,15 @@ class ETLService:
             transformer_config = self.config['sources'][source].get('transformer', {})
             
             if source == "krx":
-                transformer = KRXTransformer(session, transformer_config)
+                # Redis 클라이언트 가져오기
+                redis_client = None
+                if self.redis_db:
+                    try:
+                        redis_client = await self.redis_db.get_client()
+                    except Exception as e:
+                        logger.warning(f"Failed to get Redis client: {e}")
+                
+                transformer = KRXTransformer(session, redis_client, transformer_config)
             else:
                 raise ValueError(f"Transformer not implemented for source: {source}")
             
@@ -247,6 +261,13 @@ class ETLService:
 # FastAPI 의존성 주입을 위한 팩토리 함수
 async def get_etl_service(postgres_db: PostgresDB = Depends(get_postgres_db)) -> ETLService:
     """ETL 서비스 인스턴스 생성"""
-    service = ETLService(postgres_db)
+    redis_db = None
+    if get_redis_db:
+        try:
+            redis_db = await get_redis_db()
+        except Exception as e:
+            logger.warning(f"Failed to get Redis DB: {e}")
+    
+    service = ETLService(postgres_db, redis_db)
     await service._initialize_components()
     return service

@@ -36,7 +36,7 @@ main:
               trade_date: ${trade_date}
             auth:
               type: OIDC
-            timeout: 300  # 5분 타임아웃
+            timeout: 900  # 15분 타임아웃
           result: extract_response
         retry:
           predicate: ${http_retry_predicate}
@@ -109,7 +109,7 @@ main:
                 calculate_trading_value: true
             auth:
               type: OIDC
-            timeout: 300  # 5분 타임아웃
+            timeout: 900  # 15분 타임아웃
           result: transform_response
         retry:
           predicate: ${http_retry_predicate}
@@ -180,7 +180,7 @@ main:
               mode: "upsert"
             auth:
               type: OIDC
-            timeout: 600  # 10분 타임아웃
+            timeout: 1200  # 20분 타임아웃
           result: load_response
         retry:
           predicate: ${http_retry_predicate}

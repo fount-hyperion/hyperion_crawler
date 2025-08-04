@@ -83,10 +83,10 @@ steps:
         
         # Docker 빌드 실행 (build-arg로 토큰 전달)
         docker build \
-          --cache-from ${_REGION}-docker.pkg.dev/$PROJECT_ID/hyperion-backend-dev/${_SERVICE_NAME}-${BRANCH_NAME}:latest \
+          --cache-from ${_REGION}-docker.pkg.dev/$PROJECT_ID/hyperion-containers-dev/${_SERVICE_NAME}-${BRANCH_NAME}:latest \
           --build-arg ACCESS_TOKEN="$${ACCESS_TOKEN}" \
-          -t ${_REGION}-docker.pkg.dev/$PROJECT_ID/hyperion-backend-dev/${_SERVICE_NAME}-${BRANCH_NAME}:${COMMIT_SHA} \
-          -t ${_REGION}-docker.pkg.dev/$PROJECT_ID/hyperion-backend-dev/${_SERVICE_NAME}-${BRANCH_NAME}:latest \
+          -t ${_REGION}-docker.pkg.dev/$PROJECT_ID/hyperion-containers-dev/${_SERVICE_NAME}-${BRANCH_NAME}:${COMMIT_SHA} \
+          -t ${_REGION}-docker.pkg.dev/$PROJECT_ID/hyperion-containers-dev/${_SERVICE_NAME}-${BRANCH_NAME}:latest \
           .
 
   # 5. Artifact Registry에 푸시
@@ -95,39 +95,37 @@ steps:
     args:
       - 'push'
       - '--all-tags'
-      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/hyperion-backend-dev/${_SERVICE_NAME}-${BRANCH_NAME}'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/hyperion-containers-dev/${_SERVICE_NAME}-${BRANCH_NAME}'
 
   # 6. Cloud Run에 배포
   - name: 'gcr.io/cloud-builders/gcloud'
     id: 'deploy'
+    entrypoint: 'bash'
     args:
-      - 'run'
-      - 'deploy'
-      - '${_SERVICE_NAME}-${BRANCH_NAME}'
-      - '--image'
-      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/hyperion-backend-dev/${_SERVICE_NAME}-${BRANCH_NAME}:${COMMIT_SHA}'
-      - '--region'
-      - '${_REGION}'
-      - '--platform'
-      - 'managed'
-      - '--allow-unauthenticated'
-      - '--memory'
-      - '512Mi'
-      - '--cpu'
-      - '1'
-      - '--timeout'
-      - '300'
-      - '--max-instances'
-      - '10'
-      - '--min-instances'
-      - '0'
-      - '--port'
-      - '8080'
-      - '--service-account'
-      - '${_SERVICE_ACCOUNT}'
-      - '--set-env-vars'
-      - 'ENVIRONMENT=${BRANCH_NAME},GOOGLE_CLOUD_PROJECT=${PROJECT_ID}'
-      - '--no-use-http2'
+      - '-c'
+      - |
+        # 배포 실행
+        gcloud run deploy ${_SERVICE_NAME}-${BRANCH_NAME} \
+          --image ${_REGION}-docker.pkg.dev/$PROJECT_ID/hyperion-containers-dev/${_SERVICE_NAME}-${BRANCH_NAME}:${COMMIT_SHA} \
+          --region ${_REGION} \
+          --platform managed \
+          --allow-unauthenticated \
+          --memory 512Mi \
+          --cpu 1 \
+          --timeout 300 \
+          --max-instances 10 \
+          --min-instances 0 \
+          --port 8080 \
+          --service-account ${_SERVICE_ACCOUNT} \
+          --set-env-vars ENVIRONMENT=${BRANCH_NAME},GOOGLE_CLOUD_PROJECT=${PROJECT_ID} \
+          --no-use-http2
+        
+        # 배포 실패 시 플래그 생성
+        if [ $? -ne 0 ]; then
+          echo "Deployment failed"
+          touch /workspace/.build_failed
+          exit 1
+        fi
 
   # 7. 빌드 성공 알림
   - name: 'gcr.io/cloud-builders/gcloud'
@@ -184,28 +182,30 @@ steps:
         fi
 
 # 빌드 실패 시 알림
-  # Cloud Build의 마지막 단계로 실행되며, 이전 단계가 실패해도 항상 실행됨
+  # 이전 모든 단계가 완료된 후 실행 (성공/실패 여부와 관계없이)
   - name: 'gcr.io/cloud-builders/gcloud'
     id: 'notify-failure'
     entrypoint: 'bash'
     secretEnv: ['TEAMS_WEBHOOK_URL']
-    # waitFor: ['-'] 설정으로 이전 단계의 성공/실패와 관계없이 실행
-    waitFor: ['-']
+    # 이전 모든 단계가 완료될 때까지 기다림
+    waitFor: ['deploy']
     args:
       - '-c'
       - |
-        # 빌드 상태 확인 (이전 단계 중 하나라도 실패했는지)
-        BUILD_STATUS="SUCCESS"
+        # 디버깅을 위한 로그
+        echo "Checking build status for failure notification..."
         
-        # gcloud builds describe로 현재 빌드 상태 확인
-        CURRENT_STATUS=$(gcloud builds describe ${BUILD_ID} --format="value(status)" 2>/dev/null || echo "UNKNOWN")
-        
-        if [ "$${CURRENT_STATUS}" != "SUCCESS" ] && [ "$${CURRENT_STATUS}" != "WORKING" ]; then
-          BUILD_STATUS="FAILURE"
-        fi
-        
-        # 실패한 경우에만 알림 전송
-        if [ "$${BUILD_STATUS}" == "FAILURE" ] && [ ! -z "$${TEAMS_WEBHOOK_URL}" ]; then
+        # 빌드 실패 플래그 확인
+        if [ -f /workspace/.build_failed ]; then
+          echo "Build failed, sending Teams notification..."
+          
+          # Teams 웹훅 URL 확인
+          if [ -z "$${TEAMS_WEBHOOK_URL}" ]; then
+            echo "TEAMS_WEBHOOK_URL is not set"
+            exit 0
+          fi
+          
+          echo "Sending notification to Teams..."
           curl -X POST $${TEAMS_WEBHOOK_URL} \
             -H 'Content-Type: application/json' \
             -d '{
@@ -244,6 +244,8 @@ steps:
                 }]
               }]
             }' || true
+        else
+          echo "No build failure detected, skipping failure notification"
         fi
 
 # 빌드 로그 설정

@@ -33,7 +33,7 @@ steps:
         
         cd api
         # Kardia 및 의존성 설치
-        python3.13 -m pip install git+https://github.com/fount-hyperion/kardia.git@main
+        python3.13 -m pip install git+https://github.com/fount-hyperion/kardia.git@latest
         python3.13 -m pip install -r requirements.txt
         python3.13 -m pip install -r requirements-dev.txt
         cd ..

@@ -85,7 +85,14 @@ class ETLService:
                 # Extractor 초기화
                 if source_name == "krx":
                     self.extractors[source_name] = KRXExtractor()
-                    self.transformers[source_name] = KRXTransformer(session, source_config.get('transformer', {}))
+                    # Redis 클라이언트 가져오기
+                    redis_client = None
+                    if self.redis_db:
+                        try:
+                            redis_client = await self.redis_db.get_client()
+                        except Exception as e:
+                            logger.warning(f"Failed to get Redis client during initialization: {e}")
+                    self.transformers[source_name] = KRXTransformer(session, redis_client, source_config.get('transformer', {}))
                     self.loaders[source_name] = KRXLoader(session, source_config.get('loader', {}).get('config', {}))
                 # TODO: 다른 데이터 소스들이 구현되면 추가
                 # elif source_name == "dart":

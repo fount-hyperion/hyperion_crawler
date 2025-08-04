@@ -60,7 +60,7 @@ steps:
         gcloud auth list --filter=status:ACTIVE --format="value(account)"
         
         # Access token 생성
-        gcloud auth print-access-token > /workspace/access_token.txt
+        gcloud auth print-access-token > /workspace/access_token.txt || { touch /workspace/.build_failed; exit 1; }
         
         # 토큰 확인 및 길이 출력
         if [ -s /workspace/access_token.txt ]; then
@@ -68,6 +68,7 @@ steps:
           echo "Access token successfully generated (length: $${TOKEN_LENGTH})"
         else
           echo "Failed to generate access token"
+          touch /workspace/.build_failed
           exit 1
         fi
 
@@ -87,7 +88,7 @@ steps:
           --build-arg ACCESS_TOKEN="$${ACCESS_TOKEN}" \
           -t ${_REGION}-docker.pkg.dev/$PROJECT_ID/hyperion-containers-dev/${_SERVICE_NAME}-${BRANCH_NAME}:${COMMIT_SHA} \
           -t ${_REGION}-docker.pkg.dev/$PROJECT_ID/hyperion-containers-dev/${_SERVICE_NAME}-${BRANCH_NAME}:latest \
-          .
+          . || { touch /workspace/.build_failed; exit 1; }
 
   # 5. Artifact Registry에 푸시
   - name: 'gcr.io/cloud-builders/docker'
@@ -127,142 +128,6 @@ steps:
           exit 1
         fi
 
-  # 7. 빌드 성공 알림
-  - name: 'gcr.io/cloud-builders/gcloud'
-    id: 'notify-success'
-    entrypoint: 'bash'
-    secretEnv: ['TEAMS_WEBHOOK_URL']
-    args:
-      - '-c'
-      - |
-        if [ ! -z "$${TEAMS_WEBHOOK_URL}" ]; then
-          SERVICE_URL=$(gcloud run services describe ${_SERVICE_NAME}-${BRANCH_NAME} \
-            --region ${_REGION} \
-            --format 'value(status.url)')
-          
-          # Teams 메시지 카드 형식
-          curl -X POST $${TEAMS_WEBHOOK_URL} \
-            -H 'Content-Type: application/json' \
-            -d '{
-              "@type": "MessageCard",
-              "@context": "https://schema.org/extensions",
-              "themeColor": "00FF00",
-              "summary": "Hyperion Crawler 배포 성공",
-              "sections": [{
-                "activityTitle": "✅ Hyperion Crawler 배포 성공",
-                "facts": [
-                  {
-                    "name": "환경",
-                    "value": "'"${BRANCH_NAME}"'"
-                  },
-                  {
-                    "name": "커밋",
-                    "value": "'"${SHORT_SHA}"'"
-                  },
-                  {
-                    "name": "프로젝트",
-                    "value": "'"${PROJECT_ID}"'"
-                  },
-                  {
-                    "name": "서비스 URL",
-                    "value": "'"$${SERVICE_URL}"'"
-                  }
-                ],
-                "markdown": true
-              }],
-              "potentialAction": [{
-                "@type": "OpenUri",
-                "name": "빌드 로그 보기",
-                "targets": [{
-                  "os": "default",
-                  "uri": "https://console.cloud.google.com/cloud-build/builds/'"${BUILD_ID}"'?project='"${PROJECT_ID}"'"
-                }]
-              }]
-            }' || true
-        fi
-
-# 빌드 실패 시 알림
-  # 모든 이전 단계와 병렬로 실행되지만, 마지막에 실행되도록 설정
-  - name: 'gcr.io/cloud-builders/gcloud'
-    id: 'notify-failure'
-    entrypoint: 'bash'
-    secretEnv: ['TEAMS_WEBHOOK_URL']
-    # 이 단계는 다른 모든 단계와 무관하게 병렬로 시작하지만, 
-    # 스크립트 내부에서 대기하여 마지막에 실행됨
-    waitFor: ['-']
-    args:
-      - '-c'
-      - |
-        # 빌드가 완료될 때까지 대기 (최대 15분)
-        echo "Waiting for build to complete..."
-        WAIT_TIME=0
-        MAX_WAIT=900  # 15분
-        
-        while [ $$WAIT_TIME -lt $$MAX_WAIT ]; do
-          # Cloud Build 상태 확인
-          BUILD_STATUS=$$(gcloud builds describe ${BUILD_ID} --format="value(status)" 2>/dev/null || echo "UNKNOWN")
-          
-          if [ "$$BUILD_STATUS" != "WORKING" ] && [ "$$BUILD_STATUS" != "QUEUED" ]; then
-            echo "Build completed with status: $$BUILD_STATUS"
-            break
-          fi
-          
-          sleep 10
-          WAIT_TIME=$$(($$WAIT_TIME + 10))
-        done
-        
-        # 빌드 실패 확인
-        if [ "$$BUILD_STATUS" == "FAILURE" ] || [ "$$BUILD_STATUS" == "TIMEOUT" ] || [ "$$BUILD_STATUS" == "CANCELLED" ]; then
-          echo "Build failed with status: $$BUILD_STATUS, sending Teams notification..."
-          
-          # Teams 웹훅 URL 확인
-          if [ -z "$${TEAMS_WEBHOOK_URL}" ]; then
-            echo "TEAMS_WEBHOOK_URL is not set"
-            exit 0
-          fi
-          
-          echo "Sending failure notification to Teams..."
-          curl -X POST $${TEAMS_WEBHOOK_URL} \
-            -H 'Content-Type: application/json' \
-            -d '{
-              "@type": "MessageCard",
-              "@context": "https://schema.org/extensions",
-              "themeColor": "FF0000",
-              "summary": "Hyperion Crawler 빌드 실패",
-              "sections": [{
-                "activityTitle": "❌ Hyperion Crawler 빌드 실패",
-                "facts": [
-                  {
-                    "name": "환경",
-                    "value": "'"${BRANCH_NAME}"'"
-                  },
-                  {
-                    "name": "커밋",
-                    "value": "'"${SHORT_SHA}"'"
-                  },
-                  {
-                    "name": "프로젝트",
-                    "value": "'"${PROJECT_ID}"'"
-                  },
-                  {
-                    "name": "빌드 ID",
-                    "value": "'"${BUILD_ID}"'"
-                  }
-                ],
-                "markdown": true
-              }],
-              "potentialAction": [{
-                "@type": "OpenUri",
-                "name": "빌드 로그 보기",
-                "targets": [{
-                  "os": "default",
-                  "uri": "https://console.cloud.google.com/cloud-build/builds/'"${BUILD_ID}"'?project='"${PROJECT_ID}"'"
-                }]
-              }]
-            }' || true
-        else
-          echo "No build failure detected, skipping failure notification"
-        fi
 
 # 빌드 로그 설정
 options:
@@ -271,9 +136,3 @@ options:
 # 빌드 시간 제한
 timeout: '1200s'  # 20분
 
-# 빌드 알림 (Pub/Sub 토픽으로 전송)
-# Cloud Build 설정에서 알림을 구성해야 합니다
-availableSecrets:
-  secretManager:
-  - versionName: projects/${PROJECT_ID}/secrets/teams-webhook-build-url/versions/latest
-    env: 'TEAMS_WEBHOOK_URL'

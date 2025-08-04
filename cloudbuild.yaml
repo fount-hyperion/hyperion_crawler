@@ -182,22 +182,38 @@ steps:
         fi
 
 # 빌드 실패 시 알림
-  # 이전 모든 단계가 완료된 후 실행 (성공/실패 여부와 관계없이)
+  # 모든 이전 단계와 병렬로 실행되지만, 마지막에 실행되도록 설정
   - name: 'gcr.io/cloud-builders/gcloud'
     id: 'notify-failure'
     entrypoint: 'bash'
     secretEnv: ['TEAMS_WEBHOOK_URL']
-    # 이전 모든 단계가 완료될 때까지 기다림
-    waitFor: ['deploy']
+    # 이 단계는 다른 모든 단계와 무관하게 병렬로 시작하지만, 
+    # 스크립트 내부에서 대기하여 마지막에 실행됨
+    waitFor: ['-']
     args:
       - '-c'
       - |
-        # 디버깅을 위한 로그
-        echo "Checking build status for failure notification..."
+        # 빌드가 완료될 때까지 대기 (최대 15분)
+        echo "Waiting for build to complete..."
+        WAIT_TIME=0
+        MAX_WAIT=900  # 15분
         
-        # 빌드 실패 플래그 확인
-        if [ -f /workspace/.build_failed ]; then
-          echo "Build failed, sending Teams notification..."
+        while [ $WAIT_TIME -lt $MAX_WAIT ]; do
+          # Cloud Build 상태 확인
+          BUILD_STATUS=$(gcloud builds describe ${BUILD_ID} --format="value(status)" 2>/dev/null || echo "UNKNOWN")
+          
+          if [ "$BUILD_STATUS" != "WORKING" ] && [ "$BUILD_STATUS" != "QUEUED" ]; then
+            echo "Build completed with status: $BUILD_STATUS"
+            break
+          fi
+          
+          sleep 10
+          WAIT_TIME=$((WAIT_TIME + 10))
+        done
+        
+        # 빌드 실패 확인
+        if [ "$BUILD_STATUS" == "FAILURE" ] || [ "$BUILD_STATUS" == "TIMEOUT" ] || [ "$BUILD_STATUS" == "CANCELLED" ]; then
+          echo "Build failed with status: $BUILD_STATUS, sending Teams notification..."
           
           # Teams 웹훅 URL 확인
           if [ -z "$${TEAMS_WEBHOOK_URL}" ]; then
@@ -205,7 +221,7 @@ steps:
             exit 0
           fi
           
-          echo "Sending notification to Teams..."
+          echo "Sending failure notification to Teams..."
           curl -X POST $${TEAMS_WEBHOOK_URL} \
             -H 'Content-Type: application/json' \
             -d '{

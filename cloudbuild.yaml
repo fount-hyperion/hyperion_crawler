@@ -198,22 +198,22 @@ steps:
         WAIT_TIME=0
         MAX_WAIT=900  # 15분
         
-        while [ $WAIT_TIME -lt $MAX_WAIT ]; do
+        while [ $$WAIT_TIME -lt $$MAX_WAIT ]; do
           # Cloud Build 상태 확인
-          BUILD_STATUS=$(gcloud builds describe ${BUILD_ID} --format="value(status)" 2>/dev/null || echo "UNKNOWN")
+          BUILD_STATUS=$$(gcloud builds describe ${BUILD_ID} --format="value(status)" 2>/dev/null || echo "UNKNOWN")
           
-          if [ "$BUILD_STATUS" != "WORKING" ] && [ "$BUILD_STATUS" != "QUEUED" ]; then
-            echo "Build completed with status: $BUILD_STATUS"
+          if [ "$$BUILD_STATUS" != "WORKING" ] && [ "$$BUILD_STATUS" != "QUEUED" ]; then
+            echo "Build completed with status: $$BUILD_STATUS"
             break
           fi
           
           sleep 10
-          WAIT_TIME=$((WAIT_TIME + 10))
+          WAIT_TIME=$$(($$WAIT_TIME + 10))
         done
         
         # 빌드 실패 확인
-        if [ "$BUILD_STATUS" == "FAILURE" ] || [ "$BUILD_STATUS" == "TIMEOUT" ] || [ "$BUILD_STATUS" == "CANCELLED" ]; then
-          echo "Build failed with status: $BUILD_STATUS, sending Teams notification..."
+        if [ "$$BUILD_STATUS" == "FAILURE" ] || [ "$$BUILD_STATUS" == "TIMEOUT" ] || [ "$$BUILD_STATUS" == "CANCELLED" ]; then
+          echo "Build failed with status: $$BUILD_STATUS, sending Teams notification..."
           
           # Teams 웹훅 URL 확인
           if [ -z "$${TEAMS_WEBHOOK_URL}" ]; then

@@ -52,14 +52,14 @@
 2. Secret Manager에서 Teams Webhook URL 저장:
    ```bash
    echo -n "YOUR_TEAMS_WEBHOOK_URL" | \
-   gcloud secrets create teams-webhook-url --data-file=-
+   gcloud secrets create teams-webhook-build-url --data-file=-
    ```
 
 3. Cloud Build 서비스 계정에 권한 부여:
    ```bash
    PROJECT_NUMBER=$(gcloud projects describe $(gcloud config get-value project) --format='value(projectNumber)')
    
-   gcloud secrets add-iam-policy-binding teams-webhook-url \
+   gcloud secrets add-iam-policy-binding teams-webhook-build-url \
      --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
      --role="roles/secretmanager.secretAccessor"
    ```

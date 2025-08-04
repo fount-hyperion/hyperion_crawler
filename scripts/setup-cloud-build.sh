@@ -164,7 +164,7 @@ gcloud builds triggers create \
 
 # 7. 빌드 로그 버킷 생성
 echo -e "${YELLOW}7. 빌드 로그 버킷 생성 중...${NC}"
-LOGS_BUCKET="${PROJECT_ID}_cloudbuild_logs"
+LOGS_BUCKET="${PROJECT_ID}_cloudbuild"
 if ! gsutil ls -b gs://${LOGS_BUCKET} &>/dev/null; then
     gsutil mb -p ${PROJECT_ID} -l ${REGION} gs://${LOGS_BUCKET}
     echo -e "${GREEN}✓ 로그 버킷 생성 완료${NC}"

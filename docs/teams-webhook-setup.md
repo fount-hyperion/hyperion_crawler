@@ -17,7 +17,7 @@
 ```bash
 # Webhook URL을 Secret Manager에 저장
 echo -n "YOUR_TEAMS_WEBHOOK_URL" | \
-gcloud secrets create teams-webhook-url \
+gcloud secrets create teams-webhook-build-url \
   --data-file=- \
   --replication-policy="user-managed" \
   --locations="asia-northeast3"
@@ -25,7 +25,7 @@ gcloud secrets create teams-webhook-url \
 # Cloud Build 서비스 계정에 권한 부여
 PROJECT_NUMBER=$(gcloud projects describe $(gcloud config get-value project) --format='value(projectNumber)')
 
-gcloud secrets add-iam-policy-binding teams-webhook-url \
+gcloud secrets add-iam-policy-binding teams-webhook-build-url \
   --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
 ```
@@ -80,12 +80,12 @@ gcloud builds triggers run hyperion-crawler-dev --branch=develop
 ### 알림이 오지 않는 경우
 1. Secret Manager에 URL이 올바르게 저장되었는지 확인
    ```bash
-   gcloud secrets versions access latest --secret="teams-webhook-url"
+   gcloud secrets versions access latest --secret="teams-webhook-build-url"
    ```
 
 2. Cloud Build 서비스 계정 권한 확인
    ```bash
-   gcloud secrets get-iam-policy teams-webhook-url
+   gcloud secrets get-iam-policy teams-webhook-build-url
    ```
 
 3. Cloud Build 로그에서 알림 스텝 확인

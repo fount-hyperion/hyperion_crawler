@@ -42,14 +42,17 @@ class KRXTransformer(MarketDataTransformer):
         if not await self.validate_schema(data):
             raise ValueError("Invalid data schema for KRX transformation")
         
-        # 1. Redis 캐시 확인 (당일 자산 목록)
+        # 1. 당일 동기화 여부 확인
         today = datetime.now().strftime('%Y%m%d')
-        cache_loaded = await self._load_cache_from_redis(today)
+        sync_done = await self._check_daily_sync_done(today)
         
-        if not cache_loaded:
-            # 캐시가 없으면 DB에서 조회하여 캐싱
-            await self._bulk_load_asset_cache(data)
-            await self._save_cache_to_redis(today)
+        if not sync_done:
+            # 당일 첫 실행: AssetMaster 동기화 (신규/삭제 확인)
+            await self._sync_asset_master(data)
+            await self._mark_daily_sync_done(today)
+        else:
+            # 당일 두 번째 이후 실행: 캐시에서 로드만
+            await self._load_cache_from_redis(today)
         
         for item in data:
             try:
@@ -108,59 +111,77 @@ class KRXTransformer(MarketDataTransformer):
         self.logger.info(f"Transformed {len(transformed_data)} out of {len(data)} records")
         return transformed_data
     
-    async def _bulk_load_asset_cache(self, data: List[Dict[str, Any]]):
-        """모든 심볼의 AssetMaster를 한 번에 조회하여 캐싱"""
-        # 중복 제거된 심볼 목록 생성
-        symbols = list(set(item['ticker'] for item in data))
+    async def _sync_asset_master(self, data: List[Dict[str, Any]]):
+        """
+        AssetMaster 동기화 - KRX 데이터와 DB를 비교하여 추가/삭제 처리
+        당일 1번만 실행
+        """
+        # KRX에서 받은 모든 심볼
+        krx_symbols = {item['ticker'] for item in data}
+        krx_symbol_info = {item['ticker']: item for item in data}
         
-        # 기존 AssetMaster 한 번에 조회
+        # DB의 모든 활성 국내 주식
         result = await self.db.execute(
             select(AssetMaster).where(
                 and_(
-                    AssetMaster.symbol.in_(symbols),
-                    AssetMaster.country_code == "KR"
+                    AssetMaster.country_code == "KR",
+                    AssetMaster.asset_type == "STOCK",
+                    AssetMaster.is_active == True
                 )
             )
         )
-        existing_assets = result.scalars().all()
+        db_assets = result.scalars().all()
+        db_symbols = {asset.symbol for asset in db_assets}
         
-        # 캐시에 저장
-        for asset in existing_assets:
-            cache_key = f"{asset.symbol}_{asset.market}"
-            self._asset_cache[cache_key] = asset.uuid
-        
-        # 존재하는 심볼 set
-        existing_symbols = {asset.symbol for asset in existing_assets}
-        
-        # 새로 생성해야 할 자산들 일괄 생성
-        new_assets = []
-        for item in data:
-            if item['ticker'] not in existing_symbols:
+        # 1. 신규 상장 종목 처리
+        new_symbols = krx_symbols - db_symbols
+        if new_symbols:
+            new_assets = []
+            for symbol in new_symbols:
+                info = krx_symbol_info[symbol]
                 uuid = self.unique_key.generate("KRS")
-                cache_key = f"{item['ticker']}_{item['market']}"
+                cache_key = f"{symbol}_{info['market']}"
                 self._asset_cache[cache_key] = uuid
                 
                 new_assets.append(AssetMaster(
                     uuid=uuid,
                     asset_type="STOCK",
                     asset_subtype="DOMESTIC",
-                    symbol=item['ticker'],
-                    name_kr=item['name_kr'],
+                    symbol=symbol,
+                    name_kr=info['name_kr'],
                     name_en=None,
-                    market=item['market'],
+                    market=info['market'],
                     country_code="KR",
                     currency="KRW",
                     is_active=True,
                     created_at=datetime.now(),
                     updated_at=datetime.now()
                 ))
-                existing_symbols.add(item['ticker'])
-        
-        # 새 자산들 일괄 저장
-        if new_assets:
+            
             self.db.add_all(new_assets)
             await self.db.flush()
-            self.logger.info(f"Created {len(new_assets)} new assets in bulk")
+            self.logger.info(f"Added {len(new_assets)} new assets: {new_symbols}")
+        
+        # 2. 상장폐지 종목 처리
+        delisted_symbols = db_symbols - krx_symbols
+        if delisted_symbols:
+            # is_active를 False로 업데이트
+            for asset in db_assets:
+                if asset.symbol in delisted_symbols:
+                    asset.is_active = False
+                    asset.updated_at = datetime.now()
+            await self.db.flush()
+            self.logger.info(f"Marked {len(delisted_symbols)} assets as inactive: {delisted_symbols}")
+        
+        # 3. 활성 종목들 캐싱
+        for asset in db_assets:
+            if asset.symbol in krx_symbols:
+                cache_key = f"{asset.symbol}_{asset.market}"
+                self._asset_cache[cache_key] = asset.uuid
+        
+        # 캐시 저장
+        today = datetime.now().strftime('%Y%m%d')
+        await self._save_cache_to_redis(today)
     
     async def _load_cache_from_redis(self, date_key: str) -> bool:
         """
@@ -202,6 +223,35 @@ class KRXTransformer(MarketDataTransformer):
             self.logger.info(f"Saved {len(self._asset_cache)} assets to Redis cache")
         except Exception as e:
             self.logger.warning(f"Failed to save to Redis cache: {e}")
+    
+    async def _check_daily_sync_done(self, date_key: str) -> bool:
+        """
+        당일 AssetMaster 동기화 완료 여부 확인
+        """
+        if not self.redis:
+            return False
+        
+        try:
+            sync_key = f"krx:asset_sync_done:{date_key}"
+            return bool(self.redis.get(sync_key))
+        except Exception as e:
+            self.logger.warning(f"Failed to check sync status: {e}")
+            return False
+    
+    async def _mark_daily_sync_done(self, date_key: str):
+        """
+        당일 AssetMaster 동기화 완료 표시
+        """
+        if not self.redis:
+            return
+        
+        try:
+            sync_key = f"krx:asset_sync_done:{date_key}"
+            # 25시간 동안 유지 (다음날 자동 만료)
+            self.redis.setex(sync_key, 90000, "1")
+            self.logger.info(f"Marked daily sync as done for {date_key}")
+        except Exception as e:
+            self.logger.warning(f"Failed to mark sync done: {e}")
     
     async def validate_schema(self, data: List[Dict[str, Any]]) -> bool:
         """KRX 데이터 스키마 검증"""

@@ -16,32 +16,42 @@ steps:
       - |
         docker pull gcr.io/$PROJECT_ID/${_SERVICE_NAME}-${BRANCH_NAME}:latest || true
 
-  # 2. Python 의존성 설치 및 테스트
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  # 2. GitHub Token 가져오기 (테스트 단계용)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'get-test-token'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        echo "Retrieving GitHub token for test step..."
+        gcloud secrets versions access latest --secret="hyperion-github-token" > /workspace/test_token.txt
+
+  # 3. Python 의존성 설치 및 테스트
+  - name: 'python:3.13-slim'
     id: 'test'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
-        # Python 3.13 및 git 설치
-        apt-get update && apt-get install -y python3.13 python3.13-venv python3-pip git
-        python3.13 -m pip install --upgrade pip
+        # 필요한 도구 설치
+        apt-get update && apt-get install -y git
+        pip install --upgrade pip
         
-        # GitHub 토큰으로 Git 설정
-        GH_PAT=$(gcloud secrets versions access latest --secret="hyperion-github-token")
+        # workspace에서 GitHub 토큰 읽기
+        GH_PAT=$(cat /workspace/test_token.txt)
         git config --global url."https://$${GH_PAT}@github.com/".insteadOf "https://github.com/"
         
         cd api
         # Kardia 및 의존성 설치
-        python3.13 -m pip install git+https://github.com/fount-hyperion/kardia.git@latest
-        python3.13 -m pip install -r requirements.txt
-        python3.13 -m pip install -r requirements-dev.txt
+        pip install git+https://github.com/fount-hyperion/kardia.git@latest
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
         cd ..
         
         # 테스트 실행
-        python3.13 -m pytest tests/unit -v --tb=short || true  # 테스트 실패해도 계속 진행 (초기 단계)
+        python -m pytest tests/unit -v --tb=short || true  # 테스트 실패해도 계속 진행 (초기 단계)
 
-  # 3. GitHub Token 가져오기 (Secret Manager에서)
+  # 4. GitHub Token 가져오기 (빌드 단계용)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'get-github-token'
     entrypoint: 'bash'
@@ -62,7 +72,7 @@ steps:
           exit 1
         fi
 
-  # 4. Docker 이미지 빌드
+  # 5. Docker 이미지 빌드
   - name: 'gcr.io/cloud-builders/docker'
     id: 'build'
     entrypoint: 'bash'
@@ -80,7 +90,7 @@ steps:
           -t ${_REGION}-docker.pkg.dev/$PROJECT_ID/hyperion-containers-dev/${_SERVICE_NAME}-${BRANCH_NAME}:latest \
           . || { touch /workspace/.build_failed; exit 1; }
 
-  # 5. Artifact Registry에 푸시
+  # 6. Artifact Registry에 푸시
   - name: 'gcr.io/cloud-builders/docker'
     id: 'push'
     args:
@@ -88,7 +98,7 @@ steps:
       - '--all-tags'
       - '${_REGION}-docker.pkg.dev/$PROJECT_ID/hyperion-containers-dev/${_SERVICE_NAME}-${BRANCH_NAME}'
 
-  # 6. Cloud Run에 배포
+  # 7. Cloud Run에 배포
   - name: 'gcr.io/cloud-builders/gcloud'
     id: 'deploy'
     entrypoint: 'bash'

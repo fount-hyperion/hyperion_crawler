@@ -139,7 +139,7 @@ class KRXTransformer(MarketDataTransformer):
             new_assets = []
             for symbol in new_symbols:
                 info = krx_symbol_info[symbol]
-                uuid = self.unique_key.generate("KRS")
+                uuid = self.unique_key.generate("KRX", 5)  # KRX-BBBBBC (9자리)
                 cache_key = f"{symbol}_{info['market']}"
                 self._asset_cache[cache_key] = uuid
                 

@@ -40,17 +40,32 @@ class KRXExtractor(MarketDataExtractor):
         loop = asyncio.get_event_loop()
         
         try:
-            # OHLCV 데이터 추출
-            df_ohlcv = await loop.run_in_executor(None, stock.get_market_ohlcv_by_ticker, date_str)
+            # 시장별로 OHLCV 데이터 추출
+            markets = validated_params.get("markets", ["KOSPI", "KOSDAQ"])
+            df_ohlcv_list = []
+            df_cap_list = []
             
-            # 시가총액 데이터 추출
-            df_cap = await loop.run_in_executor(None, stock.get_market_cap_by_ticker, date_str)
+            for market in markets:
+                try:
+                    # 각 시장별 OHLCV 데이터
+                    df_market_ohlcv = await loop.run_in_executor(None, stock.get_market_ohlcv_by_ticker, date_str, market)
+                    df_ohlcv_list.append(df_market_ohlcv)
+                    
+                    # 각 시장별 시가총액 데이터
+                    df_market_cap = await loop.run_in_executor(None, stock.get_market_cap_by_ticker, date_str, market)
+                    df_cap_list.append(df_market_cap)
+                except Exception as e:
+                    self.logger.warning(f"Failed to get {market} data: {e}")
+            
+            # 데이터 합치기
+            import pandas as pd
+            df_ohlcv = pd.concat(df_ohlcv_list) if df_ohlcv_list else pd.DataFrame()
+            df_cap = pd.concat(df_cap_list) if df_cap_list else pd.DataFrame()
             
             # ISIN 정보는 나중에 필요한 종목만 가져오기 위해 딕셔너리 초기화만
             isin_info = {}
             
             # 시장별 티커 정보 수집
-            markets = validated_params.get("markets", ["KOSPI", "KOSDAQ"])
             market_info = {}
             name_info = {}
             

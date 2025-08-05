@@ -195,15 +195,10 @@ class KRXLoader(MarketDataLoader):
             self.logger.warning(f"Invalid KRS UUID format: {uuid_str}")
             return False
         
-        # 날짜 유효성 - 문자열도 허용 (YYYYMMDD 형식)
+        # 날짜 유효성 - date 객체여야 함
         trade_date = record['trade_date']
-        if isinstance(trade_date, str):
-            # YYYYMMDD 형식 검증
-            if len(trade_date) != 8 or not trade_date.isdigit():
-                self.logger.warning(f"Invalid trade_date format: {trade_date}")
-                return False
-        elif not isinstance(trade_date, (datetime, date)):
-            self.logger.warning(f"Invalid trade_date type: {type(trade_date)}")
+        if not isinstance(trade_date, (datetime, date)):
+            self.logger.warning(f"Invalid trade_date type: {type(trade_date)}, expected date object")
             return False
         
         # 가격 데이터 유효성

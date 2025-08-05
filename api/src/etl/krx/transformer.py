@@ -3,7 +3,7 @@ KRX (Korea Exchange) 데이터 변환기
 """
 from typing import Dict, Any, List, Optional
 import logging
-from datetime import datetime
+from datetime import datetime, date
 import redis
 import json
 
@@ -66,7 +66,7 @@ class KRXTransformer(MarketDataTransformer):
                 # 기본 변환
                 transformed = {
                     'uuid': uuid,
-                    'trade_date': item['trade_date'],
+                    'trade_date': self._parse_trade_date(item['trade_date']),
                     'open_price': self.clean_numeric(item['ohlcv']['open']),
                     'high_price': self.clean_numeric(item['ohlcv']['high']),
                     'low_price': self.clean_numeric(item['ohlcv']['low']),
@@ -145,17 +145,34 @@ class KRXTransformer(MarketDataTransformer):
                 cache_key = f"{symbol}_{info['market']}"
                 self._asset_cache[cache_key] = uuid
                 
+                # 주식 종류 추론 (종목명에서)
+                stock_type = "보통주"  # 기본값
+                if info['name_kr'].endswith("우"):
+                    stock_type = "우선주"
+                elif info['name_kr'].endswith("우B") or info['name_kr'].endswith("2우B"):
+                    stock_type = "우선주B"
+                
                 new_assets.append(AssetMaster(
                     uuid=uuid,
                     asset_type="STOCK",
                     asset_subtype="DOMESTIC",
                     symbol=symbol,
+                    isin=info.get('isin'),  # Extract에서 가져온 ISIN
                     name_kr=info['name_kr'],
-                    name_en=None,
+                    name_en=None,  # TODO: 영문명 가져오기
                     market=info['market'],
                     country_code="KR",
                     currency="KRW",
+                    listing_date=None,  # TODO: 상장일 정보 가져오기
+                    delisting_date=None,
                     is_active=True,
+                    asset_metadata={
+                        "full_name_kr": info['name_kr'],  # TODO: 정식 명칭 가져오기
+                        "security_type": "주권",
+                        "stock_type": stock_type,
+                        "par_value": "500",  # TODO: 실제 액면가 정보 가져오기 (현재는 기본값)
+                        "shares_outstanding": str(info.get('shares', 0)) if info.get('shares') else None
+                    },
                     created_by="SYS_WORKFLOW",
                     created_at=datetime.now(),
                     updated_by="SYS_WORKFLOW",
@@ -322,6 +339,26 @@ class KRXTransformer(MarketDataTransformer):
         
         # 캐시에 없으면 에러 (bulk load에서 처리했어야 함)
         raise ValueError(f"Asset not found in cache: {symbol} ({market})")
+    
+    def _parse_trade_date(self, trade_date_str: str) -> date:
+        """거래일 문자열을 date 객체로 변환"""
+        if isinstance(trade_date_str, date):
+            return trade_date_str
+        
+        if isinstance(trade_date_str, datetime):
+            return trade_date_str.date()
+        
+        if isinstance(trade_date_str, str):
+            # YYYY-MM-DD 형식
+            if '-' in trade_date_str:
+                return datetime.strptime(trade_date_str, '%Y-%m-%d').date()
+            # YYYYMMDD 형식
+            elif len(trade_date_str) == 8:
+                return datetime.strptime(trade_date_str, '%Y%m%d').date()
+            else:
+                raise ValueError(f"Unsupported date format: {trade_date_str}")
+        
+        raise ValueError(f"Invalid trade_date type: {type(trade_date_str)}")
     
     def _validate_transformed_data(self, data: Dict[str, Any]) -> bool:
         """변환된 데이터 유효성 검증"""

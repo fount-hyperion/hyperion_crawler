@@ -97,6 +97,8 @@ class KRXTransformer(MarketDataTransformer):
                 # 추가 메타데이터
                 transformed['currency'] = 'KRW'
                 transformed['data_source'] = 'KRX'
+                transformed['created_by'] = 'SYS_WORKFLOW'
+                transformed['updated_by'] = 'SYS_WORKFLOW'
                 
                 # 데이터 품질 체크
                 if self._validate_transformed_data(transformed):

@@ -9,7 +9,7 @@ from ..base import MarketDataLoader, LoadMode, LoadResult
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, delete
 from sqlalchemy.dialects.postgresql import insert
-from ...models import KrsDailyPrices, AssetMaster
+from ...models import KrsDailyPrices
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ class KRXLoader(MarketDataLoader):
         update_columns = [
             'open_price', 'high_price', 'low_price', 'close_price',
             'volume', 'change_rate', 'change_amount', 'trading_value',
-            'market_cap', 'shares_outstanding', 'updated_at'
+            'market_cap', 'shares_outstanding', 'updated_at', 'updated_by'
         ]
         
         return await self.upsert_postgres(
@@ -184,17 +184,26 @@ class KRXLoader(MarketDataLoader):
                 self.logger.warning(f"Missing required field: {field}")
                 return False
         
-        # UUID 유효성 확인 (AssetMaster에 존재하는지)
-        result = await self.db.execute(
-            select(AssetMaster).where(AssetMaster.uuid == record['uuid'])
-        )
-        if not result.scalar_one_or_none():
-            self.logger.warning(f"Invalid UUID: {record['uuid']}")
+        # UUID 형식 검증만 수행 (Transform에서 이미 AssetMaster 생성/확인됨)
+        uuid_str = record.get('uuid', '')
+        if not uuid_str or not isinstance(uuid_str, str):
+            self.logger.warning(f"Invalid UUID format: {uuid_str}")
             return False
         
-        # 날짜 유효성
-        if not isinstance(record['trade_date'], (datetime, date)):
-            self.logger.warning(f"Invalid trade_date type: {type(record['trade_date'])}")
+        # KRX UUID 형식 검증 (KRX-XXXXXX 형식)
+        if not uuid_str.startswith('KRX-') or len(uuid_str) != 11:
+            self.logger.warning(f"Invalid KRX UUID format: {uuid_str}")
+            return False
+        
+        # 날짜 유효성 - 문자열도 허용 (YYYYMMDD 형식)
+        trade_date = record['trade_date']
+        if isinstance(trade_date, str):
+            # YYYYMMDD 형식 검증
+            if len(trade_date) != 8 or not trade_date.isdigit():
+                self.logger.warning(f"Invalid trade_date format: {trade_date}")
+                return False
+        elif not isinstance(trade_date, (datetime, date)):
+            self.logger.warning(f"Invalid trade_date type: {type(trade_date)}")
             return False
         
         # 가격 데이터 유효성

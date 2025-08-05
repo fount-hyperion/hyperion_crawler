@@ -27,14 +27,14 @@ class ExtractResponse(BaseModel):
     task_id: str
     status: str
     items_extracted: int
-    data: List[Dict[str, Any]]
+    # data 필드 제거 - 메모리 제한 회피
     metadata: Dict[str, Any]
 
 
 class TransformRequest(BaseModel):
     """Transform 요청 모델"""
     task_id: str = Field(..., description="Extract 작업 ID")
-    data: List[Dict[str, Any]] = Field(..., description="변환할 데이터")
+    data: Optional[List[Dict[str, Any]]] = Field(None, description="변환할 데이터 (선택적)")
     rules: Dict[str, Any] = Field(default_factory=dict, description="변환 규칙")
 
 
@@ -43,14 +43,14 @@ class TransformResponse(BaseModel):
     task_id: str
     status: str
     items_transformed: int
-    data: List[Dict[str, Any]]
+    # data 필드 제거 - 메모리 제한 회피
 
 
 class LoadRequest(BaseModel):
     """Load 요청 모델"""
     task_id: str = Field(..., description="Transform 작업 ID")
     target: str = Field(..., description="적재 대상 테이블")
-    data: List[Dict[str, Any]] = Field(..., description="적재할 데이터")
+    data: Optional[List[Dict[str, Any]]] = Field(None, description="적재할 데이터 (선택적)")
     mode: str = Field(default="upsert", description="적재 모드 (insert, update, upsert)")
 
 
@@ -79,7 +79,7 @@ async def extract_data(
             task_id=result["task_id"],
             status="success",
             items_extracted=len(result["data"]),
-            data=result["data"],
+            # data는 응답에서 제거 - 메모리 제한 회피
             metadata=result["metadata"]
         )
         
@@ -112,8 +112,8 @@ async def transform_data(
         return TransformResponse(
             task_id=request.task_id,
             status="success",
-            items_transformed=result["count"],
-            data=result["data"]
+            items_transformed=result["count"]
+            # data는 응답에서 제거
         )
         
     except Exception as e:

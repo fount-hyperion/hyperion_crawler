@@ -103,7 +103,7 @@ main:
             url: ${api_url + "/api/v1/etl/transform/krx"}
             body:
               task_id: ${extract_response.body.task_id}
-              data: ${extract_response.body.data}
+              # data는 제거 - Transform가 task_id로 데이터를 가져옴
               rules:
                 calculate_change_amount: true
                 calculate_trading_value: true
@@ -176,7 +176,7 @@ main:
             body:
               task_id: ${transform_response.body.task_id}
               target: "krs_daily_prices"
-              data: ${transform_response.body.data}
+              # data는 제거 - Load가 task_id로 데이터를 가져옴
               mode: "upsert"
             auth:
               type: OIDC

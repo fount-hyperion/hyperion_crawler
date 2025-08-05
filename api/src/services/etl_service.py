@@ -45,6 +45,9 @@ class ETLService:
         self.transformers = {}
         self.loaders = {}
         
+        # 임시 데이터 저장소 (task_id -> data)
+        self._task_data_store = {}
+        
         # 설정에 따라 컴포넌트 초기화
         self._initialize_components()
     
@@ -104,6 +107,12 @@ class ETLService:
                 # Extractor에 db 인스턴스 전달
                 extractor = KRXExtractor(self.postgres_db)
                 result = await extractor.extract(params)
+                
+                # 데이터를 임시 저장소에 저장
+                task_id = result["task_id"]
+                self._task_data_store[task_id] = result["data"]
+                logger.info(f"Stored {len(result['data'])} items for task {task_id}")
+                
                 return result
             else:
                 raise ValueError(f"Extractor not implemented for source: {source}")
@@ -111,12 +120,19 @@ class ETLService:
             logger.error(f"Failed to extract data from {source}: {str(e)}")
             raise
     
-    async def transform_data(self, source: str, task_id: str, data: List[Dict[str, Any]], rules: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def transform_data(self, source: str, task_id: str, data: Optional[List[Dict[str, Any]]] = None, rules: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Transform - 소스별 변환기를 사용해 데이터 변환
         """
         if source not in self.transformers:
             raise ValueError(f"No transformer registered for source: {source}")
+        
+        # data가 없으면 task_id로 저장된 데이터 가져오기
+        if data is None:
+            if task_id not in self._task_data_store:
+                raise ValueError(f"No data found for task_id: {task_id}")
+            data = self._task_data_store[task_id]
+            logger.info(f"Retrieved {len(data)} items from task store for {task_id}")
         
         # 새로운 세션으로 transformer 재생성 (각 요청마다 새 세션 사용)
         async with self.postgres_db.session() as session:
@@ -146,10 +162,13 @@ class ETLService:
                 # Extract 결과를 그대로 transform에 전달
                 transformed_result = await transformer.transform(data, default_rules)
                 
+                # Transform 결과도 저장
+                self._task_data_store[task_id] = transformed_result
+                
                 return {
                     "task_id": task_id,
                     "source": source,
-                    "data": transformed_result,  # new_assets와 price_data를 포함
+                    # data는 응답에서 제거
                     "count": len(transformed_result.get('price_data', [])),
                     "new_assets_count": len(transformed_result.get('new_assets', []))
                 }
@@ -157,12 +176,19 @@ class ETLService:
                 logger.error(f"Transform failed for {source}: {str(e)}")
                 raise
     
-    async def load_data(self, source: str, task_id: str, target: str, data: List[Dict[str, Any]], mode: Optional[str] = None) -> Dict[str, Any]:
+    async def load_data(self, source: str, task_id: str, target: str, data: Optional[List[Dict[str, Any]]] = None, mode: Optional[str] = None) -> Dict[str, Any]:
         """
         Load - 소스별 로더를 사용해 데이터 적재
         """
         if source not in self.loaders:
             raise ValueError(f"No loader registered for source: {source}")
+        
+        # data가 없으면 task_id로 저장된 데이터 가져오기
+        if data is None:
+            if task_id not in self._task_data_store:
+                raise ValueError(f"No data found for task_id: {task_id}")
+            data = self._task_data_store[task_id]
+            logger.info(f"Retrieved data from task store for {task_id}")
         
         # 새로운 세션으로 loader 재생성
         async with self.postgres_db.session() as session:
@@ -183,6 +209,11 @@ class ETLService:
             
             try:
                 result = await loader.load(data, target, load_mode)
+                
+                # Load 완료 후 task 데이터 정리
+                if task_id in self._task_data_store:
+                    del self._task_data_store[task_id]
+                    logger.info(f"Cleaned up task data for {task_id}")
                 
                 return {
                     "task_id": task_id,

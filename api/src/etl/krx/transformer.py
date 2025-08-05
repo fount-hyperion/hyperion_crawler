@@ -31,7 +31,7 @@ class KRXTransformer(MarketDataTransformer):
         self.redis = redis_client
         self.cache_ttl = 86400  # 24시간 캐싱
     
-    async def transform(self, data: List[Dict[str, Any]], rules: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def transform(self, data: Union[List[Dict[str, Any]], Dict[str, Any]], rules: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         KRX 원시 데이터를 데이터베이스 형식으로 변환
         - Extract에서 받은 metadata의 new_assets를 처리하여 AssetMaster 데이터 생성
@@ -40,9 +40,18 @@ class KRXTransformer(MarketDataTransformer):
         rules = rules or {}
         
         # Extract 단계에서 받은 데이터와 메타데이터 분리
-        metadata = data.pop('metadata', {}) if isinstance(data, dict) else {}
-        price_data = data.get('data', []) if isinstance(data, dict) else data
-        new_assets_info = metadata.get('new_assets', [])
+        if isinstance(data, dict) and 'data' in data and 'metadata' in data:
+            # ETL Service에서 전달하는 형식
+            price_data = data['data']
+            metadata = data['metadata']
+            new_assets_info = metadata.get('new_assets', [])
+        elif isinstance(data, list):
+            # 리스트 형식으로 전달되는 경우 (레거시)
+            price_data = data
+            metadata = {}
+            new_assets_info = []
+        else:
+            raise ValueError(f"Invalid data schema for KRX transformation: expected dict with 'data' and 'metadata' keys or list, got {type(data)}")
         
         # 결과 데이터 구조
         result = {

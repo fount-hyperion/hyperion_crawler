@@ -49,16 +49,19 @@ class KRXExtractor(MarketDataExtractor):
                     # 각 시장별 OHLCV 데이터
                     df_ohlcv = await loop.run_in_executor(None, stock.get_market_ohlcv_by_ticker, date_str, market)
                     
-                    # 각 시장별 시가총액 데이터
+                    # 각 시장별 시가총액 데이터  
                     df_cap = await loop.run_in_executor(None, stock.get_market_cap_by_ticker, date_str, market)
+                    
+                    # 전체 종목명을 한 번에 가져오기
+                    df_names = await loop.run_in_executor(None, stock.get_market_ticker_and_name, date_str, market)
                     
                     # 바로 처리하여 메모리 절약
                     for ticker in df_ohlcv.index:
                         ohlcv_row = df_ohlcv.loc[ticker]
                         cap_row = df_cap.loc[ticker] if ticker in df_cap.index else {}
                         
-                        # 종목명 가져오기
-                        name_kr = await loop.run_in_executor(None, stock.get_market_ticker_name, ticker)
+                        # 종목명 (이미 가져온 데이터에서)
+                        name_kr = df_names.get(ticker, ticker) if ticker in df_names.index else ticker
                         
                         raw_data.append({
                             'ticker': ticker,
@@ -80,6 +83,7 @@ class KRXExtractor(MarketDataExtractor):
                     # DataFrame 즉시 삭제하여 메모리 확보
                     del df_ohlcv
                     del df_cap
+                    del df_names
                     
                 except Exception as e:
                     self.logger.warning(f"Failed to get {market} data: {e}")

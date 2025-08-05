@@ -82,6 +82,10 @@ class KRXLoader(MarketDataLoader):
         
         # 적재 모드에 따른 처리
         try:
+            # 디버깅을 위한 첫 번째 아이템 로그
+            if valid_data:
+                self.logger.info(f"First item keys: {list(valid_data[0].keys())}")
+            
             if mode == LoadMode.UPSERT:
                 load_result = await self._upsert_data(valid_data)
             elif mode == LoadMode.INSERT:
@@ -145,12 +149,8 @@ class KRXLoader(MarketDataLoader):
     async def _upsert_data(self, data: List[Dict[str, Any]]) -> Dict[str, int]:
         """UPSERT 모드로 데이터 적재"""
         # 업데이트할 컬럼 목록 (충돌 시 업데이트할 필드)
-        update_columns = [
-            'open_price', 'high_price', 'low_price', 'close_price',
-            'volume', 'change_rate', 'change_amount', 'trading_value',
-            'market_cap', 'shares_outstanding', 'updated_at', 'updated_by',
-            'data_source', 'currency'
-        ]
+        # update_columns을 None으로 설정하면 데이터에 있는 모든 필드가 업데이트됨
+        update_columns = None
         
         return await self.upsert_postgres(
             self.table_model,

@@ -291,16 +291,23 @@ class ETLService:
         }
 
 
+# 싱글톤 ETL Service 인스턴스
+_etl_service_instance = None
+
 # FastAPI 의존성 주입을 위한 팩토리 함수
 async def get_etl_service(postgres_db: PostgresDB = Depends(get_postgres_db)) -> ETLService:
-    """ETL 서비스 인스턴스 생성"""
-    redis_db = None
-    if get_redis_db:
-        try:
-            redis_db = await get_redis_db()
-        except Exception as e:
-            logger.warning(f"Failed to get Redis DB: {e}")
+    """ETL 서비스 인스턴스 반환 (싱글톤)"""
+    global _etl_service_instance
     
-    service = ETLService(postgres_db, redis_db)
-    await service._initialize_components()
-    return service
+    if _etl_service_instance is None:
+        redis_db = None
+        if get_redis_db:
+            try:
+                redis_db = await get_redis_db()
+            except Exception as e:
+                logger.warning(f"Failed to get Redis DB: {e}")
+        
+        _etl_service_instance = ETLService(postgres_db, redis_db)
+        await _etl_service_instance._initialize_components()
+    
+    return _etl_service_instance

@@ -76,7 +76,7 @@ class KRXTransformer(MarketDataTransformer):
                 'symbol': asset_info['ticker'],
                 'isin': asset_info.get('isin'),
                 'name_kr': name_kr,
-                'name_en': None,
+                'name_en': name_kr,  # TODO: KRX는 영문명을 제공하지 않음. 추후 다른 소스에서 업데이트 필요
                 'market': asset_info['market'],
                 'country_code': "KR",
                 'currency': "KRW",
@@ -140,6 +140,10 @@ class KRXTransformer(MarketDataTransformer):
                 )
             else:
                 transformed['trading_value'] = None
+            
+            # 감사 필드 추가
+            transformed['created_by'] = "SYS_WORKFLOW"
+            transformed['updated_by'] = "SYS_WORKFLOW"
             
             # 추가 메타데이터
             transformed['currency'] = 'KRW'

@@ -1,7 +1,7 @@
 """
 KRX (Korea Exchange) 데이터 적재기
 """
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Union
 import logging
 from datetime import datetime, date
 
@@ -23,7 +23,7 @@ class KRXLoader(MarketDataLoader):
     
     async def load(
         self,
-        data: Dict[str, Any],
+        data: Union[Dict[str, Any], List[Dict[str, Any]]],
         target: str = "krs_daily_prices",
         mode: LoadMode = LoadMode.UPSERT
     ) -> LoadResult:
@@ -35,9 +35,15 @@ class KRXLoader(MarketDataLoader):
         """
         result = LoadResult()
         
-        # Transform 결과 분리
-        new_assets = data.get('new_assets', [])
-        price_data = data.get('price_data', [])
+        # data가 딕셔너리인지 리스트인지 확인
+        if isinstance(data, dict):
+            # Transform 결과 분리
+            new_assets = data.get('new_assets', [])
+            price_data = data.get('price_data', [])
+        else:
+            # 리스트로 전달된 경우 (레거시)
+            new_assets = []
+            price_data = data
         
         # 1. 신규 AssetMaster 저장
         if new_assets:

@@ -61,7 +61,7 @@ class KRXExtractor(MarketDataExtractor):
                         cap_row = df_cap.loc[ticker] if ticker in df_cap.index else {}
                         
                         # 종목명 (이미 가져온 데이터에서)
-                        name_kr = df_names.get(ticker, ticker) if ticker in df_names.index else ticker
+                        name_kr = df_names.loc[ticker, '한글명'] if ticker in df_names.index else ticker
                         
                         raw_data.append({
                             'ticker': ticker,

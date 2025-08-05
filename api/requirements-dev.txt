@@ -5,11 +5,11 @@ pytest-cov==6.0.0
 pytest-mock==3.14.1
 
 # Development
-black==25.0.1
+black==25.1.0
 flake8==7.3.0
 mypy==1.14.1
 isort==5.13.2
 
 # Type stubs
-types-requests==2.32.0.20250904
-types-pyyaml==6.0.12.20250828
+types-requests==2.32.4.20250611
+types-PyYAML==6.0.12.20250516

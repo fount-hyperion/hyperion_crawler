@@ -3,7 +3,6 @@ fastapi==0.116.1
 uvicorn[standard]==0.24.0
 pydantic==2.11.7
 pydantic-settings==2.10.1
-setuptools==80.9.0  # pykrx의 pkg_resources 의존성
 
 # Hyperion Core
 # kardia==0.3.1  # Dockerfile에서 별도 설치

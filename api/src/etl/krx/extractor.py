@@ -4,6 +4,7 @@ KRX (Korea Exchange) 데이터 추출기
 from typing import Dict, Any, List, Optional
 import asyncio
 import logging
+import numpy as np
 from pykrx import stock
 from pykrx.website import krx
 from sqlalchemy import select
@@ -21,6 +22,20 @@ class KRXExtractor(MarketDataExtractor):
     def __init__(self, db_instance=None):
         super().__init__("krx")
         self.db_instance = db_instance
+    
+    def _convert_numpy_types(self, obj):
+        """numpy 타입을 Python 기본 타입으로 변환"""
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, dict):
+            return {k: self._convert_numpy_types(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_numpy_types(item) for item in obj]
+        return obj
     
     async def extract(self, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
@@ -77,15 +92,15 @@ class KRXExtractor(MarketDataExtractor):
                             'trade_date': target_date,
                             'uuid': existing_assets.get(ticker),  # 기존 UUID 매핑
                             'ohlcv': {
-                                'open': ohlcv_row['시가'],
-                                'high': ohlcv_row['고가'],
-                                'low': ohlcv_row['저가'],
-                                'close': ohlcv_row['종가'],
-                                'volume': ohlcv_row['거래량'],
-                                'change_rate': ohlcv_row['등락률']
+                                'open': int(ohlcv_row['시가']),
+                                'high': int(ohlcv_row['고가']),
+                                'low': int(ohlcv_row['저가']),
+                                'close': int(ohlcv_row['종가']),
+                                'volume': int(ohlcv_row['거래량']),
+                                'change_rate': float(ohlcv_row['등락률'])
                             },
-                            'market_cap': cap_row['시가총액'] if cap_row is not None else None,
-                            'shares': cap_row['상장주식수'] if cap_row is not None else None
+                            'market_cap': int(cap_row['시가총액']) if cap_row is not None else None,
+                            'shares': int(cap_row['상장주식수']) if cap_row is not None else None
                         }
                         
                         all_data.append(data_item)
@@ -112,8 +127,8 @@ class KRXExtractor(MarketDataExtractor):
                 except Exception as e:
                     self.logger.warning(f"Failed to get {market} data: {e}")
             
-            # 응답 생성
-            return self.create_response(
+            # 응답 생성 (numpy 타입 변환 적용)
+            response = self.create_response(
                 task_id=self.create_task_id(date_str),
                 data=all_data,
                 metadata={
@@ -124,6 +139,9 @@ class KRXExtractor(MarketDataExtractor):
                     "new_assets": new_assets  # 신규 종목 정보
                 }
             )
+            
+            # 전체 응답 데이터의 numpy 타입 변환
+            return self._convert_numpy_types(response)
             
         except Exception as e:
             self.logger.error(f"Failed to extract KRX data: {str(e)}")

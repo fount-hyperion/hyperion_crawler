@@ -18,9 +18,9 @@ logger = logging.getLogger(__name__)
 class KRXExtractor(MarketDataExtractor):
     """KRX 데이터 추출기"""
     
-    def __init__(self, db_session: Optional[AsyncSession] = None):
+    def __init__(self, db_instance=None):
         super().__init__("krx")
-        self.db = db_session
+        self.db_instance = db_instance
     
     async def extract(self, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
@@ -42,14 +42,15 @@ class KRXExtractor(MarketDataExtractor):
         
         # 1. DB에서 기존 AssetMaster 정보 가져오기 (KRS UUID, symbol만)
         existing_assets = {}
-        if self.db:
-            result = await self.db.execute(
-                select(AssetMaster.uuid, AssetMaster.symbol).where(
-                    AssetMaster.uuid.like('KRS-%')
+        if self.db_instance:
+            async with self.db_instance.session() as session:
+                result = await session.execute(
+                    select(AssetMaster.uuid, AssetMaster.symbol).where(
+                        AssetMaster.uuid.like('KRS-%')
+                    )
                 )
-            )
-            for row in result:
-                existing_assets[row.symbol] = row.uuid
+                for row in result:
+                    existing_assets[row.symbol] = row.uuid
         
         try:
             # 시장별로 데이터 추출

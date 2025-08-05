@@ -100,14 +100,13 @@ class ETLService:
         
         try:
             # 새 세션으로 extractor 생성
-            async with self.postgres_db.session() as session:
-                if source == "krx":
-                    extractor = KRXExtractor(session)
-                else:
-                    raise ValueError(f"Extractor not implemented for source: {source}")
-                
+            if source == "krx":
+                # Extractor에 db 인스턴스 전달
+                extractor = KRXExtractor(self.postgres_db)
                 result = await extractor.extract(params)
                 return result
+            else:
+                raise ValueError(f"Extractor not implemented for source: {source}")
         except Exception as e:
             logger.error(f"Failed to extract data from {source}: {str(e)}")
             raise

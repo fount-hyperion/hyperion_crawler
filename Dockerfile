@@ -25,6 +25,8 @@ RUN if [ -n "$GH_TOKEN" ]; then \
         echo "Installing with GitHub authentication..."; \
         # Git config로 HTTPS URL을 토큰 포함 URL로 자동 변환
         git config --global url."https://${GH_TOKEN}@github.com/".insteadOf "https://github.com/" && \
+        # setuptools를 먼저 설치 (pykrx 의존성)
+        pip install --user --no-cache-dir setuptools && \
         # Kardia latest 버전 설치
         pip install --user --no-cache-dir git+https://github.com/fount-hyperion/kardia.git@latest && \
         # 나머지 패키지 설치
@@ -33,6 +35,7 @@ RUN if [ -n "$GH_TOKEN" ]; then \
         rm -rf ~/.gitconfig; \
     else \
         echo "Installing without private repository access..."; \
+        pip install --user --no-cache-dir setuptools && \
         pip install --user --no-cache-dir -r requirements.txt; \
     fi
 

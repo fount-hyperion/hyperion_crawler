@@ -152,36 +152,47 @@ class BaseLoader(ABC):
         loaded = 0
         updated = 0
         
-        for item in data:
-            stmt = insert(table_model).values(**item)
+        try:
+            for item in data:
+                # 테이블 컬럼에 맞는 데이터만 필터링
+                table_columns = {c.name for c in table_model.__table__.columns}
+                filtered_item = {k: v for k, v in item.items() if k in table_columns}
+                
+                stmt = insert(table_model).values(**filtered_item)
+                
+                if update_columns:
+                    # 지정된 컬럼만 업데이트
+                    update_dict = {col: stmt.excluded[col] for col in update_columns if col in filtered_item}
+                else:
+                    # 모든 컬럼 업데이트 (conflict 컬럼 제외)
+                    update_dict = {
+                        col: stmt.excluded[col] 
+                        for col in filtered_item.keys() 
+                        if col not in conflict_columns
+                    }
+                
+                # updated_at이 테이블에 있는 경우만 추가
+                if 'updated_at' in table_columns:
+                    update_dict['updated_at'] = datetime.now()
+                
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=conflict_columns,
+                    set_=update_dict
+                )
+                
+                result = await self.db.execute(stmt)
+                
+                # PostgreSQL의 경우 정확한 insert/update 구분이 어려움
+                # 간단히 처리
+                if result.rowcount:
+                    loaded += 1
             
-            if update_columns:
-                # 지정된 컬럼만 업데이트
-                update_dict = {col: stmt.excluded[col] for col in update_columns if col in item}
-            else:
-                # 모든 컬럼 업데이트 (conflict 컬럼 제외)
-                update_dict = {
-                    col: stmt.excluded[col] 
-                    for col in item.keys() 
-                    if col not in conflict_columns
-                }
+            await self.db.commit()
             
-            # updated_at 추가
-            update_dict['updated_at'] = datetime.now()
-            
-            stmt = stmt.on_conflict_do_update(
-                index_elements=conflict_columns,
-                set_=update_dict
-            )
-            
-            result = await self.db.execute(stmt)
-            
-            # PostgreSQL의 경우 정확한 insert/update 구분이 어려움
-            # 간단히 처리
-            if result.rowcount:
-                loaded += 1
-        
-        await self.db.commit()
+        except Exception as e:
+            self.logger.error(f"Upsert failed: {str(e)}")
+            await self.db.rollback()
+            raise
         
         return {'loaded': loaded, 'updated': updated}
     

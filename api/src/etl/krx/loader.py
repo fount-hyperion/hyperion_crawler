@@ -63,12 +63,19 @@ class KRXLoader(MarketDataLoader):
             self.logger.warning("No price data to load")
             return result
         
+        self.logger.info(f"Starting to load {len(price_data)} price records")
+        # 첫 번째 레코드 샘플 로깅
+        if price_data:
+            self.logger.debug(f"Sample price data: {price_data[0]}")
+        
         # 적재 전 검증
         valid_data, invalid_data = await self.validate_before_load(price_data, target)
         
         if invalid_data:
-            for item in invalid_data:
+            self.logger.warning(f"Found {len(invalid_data)} invalid items during validation")
+            for item in invalid_data[:5]:  # 처음 5개만 로깅
                 result.add_failure("Validation failed", item)
+                self.logger.debug(f"Invalid item: {item}")
         
         if not valid_data:
             self.logger.error("No valid data to load after validation")
@@ -204,7 +211,8 @@ class KRXLoader(MarketDataLoader):
         required_fields = ['uuid', 'trade_date', 'close_price']
         for field in required_fields:
             if field not in record or record[field] is None:
-                self.logger.warning(f"Missing required field: {field}")
+                self.logger.warning(f"Missing required field: {field} in record: {record.get('uuid', 'unknown')}")
+                self.logger.debug(f"Record keys: {list(record.keys())}")
                 return False
         
         # UUID 형식 검증

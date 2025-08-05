@@ -40,67 +40,50 @@ class KRXExtractor(MarketDataExtractor):
         loop = asyncio.get_event_loop()
         
         try:
-            # 시장별로 OHLCV 데이터 추출
+            # 시장별로 데이터 추출하고 바로 처리
             markets = validated_params.get("markets", ["KOSPI", "KOSDAQ"])
-            df_ohlcv_list = []
-            df_cap_list = []
+            raw_data = []
             
             for market in markets:
                 try:
                     # 각 시장별 OHLCV 데이터
-                    df_market_ohlcv = await loop.run_in_executor(None, stock.get_market_ohlcv_by_ticker, date_str, market)
-                    df_ohlcv_list.append(df_market_ohlcv)
+                    df_ohlcv = await loop.run_in_executor(None, stock.get_market_ohlcv_by_ticker, date_str, market)
                     
                     # 각 시장별 시가총액 데이터
-                    df_market_cap = await loop.run_in_executor(None, stock.get_market_cap_by_ticker, date_str, market)
-                    df_cap_list.append(df_market_cap)
+                    df_cap = await loop.run_in_executor(None, stock.get_market_cap_by_ticker, date_str, market)
+                    
+                    # 바로 처리하여 메모리 절약
+                    for ticker in df_ohlcv.index:
+                        ohlcv_row = df_ohlcv.loc[ticker]
+                        cap_row = df_cap.loc[ticker] if ticker in df_cap.index else {}
+                        
+                        # 종목명 가져오기
+                        name_kr = await loop.run_in_executor(None, stock.get_market_ticker_name, ticker)
+                        
+                        raw_data.append({
+                            'ticker': ticker,
+                            'name_kr': name_kr,
+                            'market': market,
+                            'trade_date': target_date,
+                            'ohlcv': {
+                                'open': ohlcv_row.get('시가'),
+                                'high': ohlcv_row.get('고가'),
+                                'low': ohlcv_row.get('저가'),
+                                'close': ohlcv_row.get('종가'),
+                                'volume': ohlcv_row.get('거래량'),
+                                'change_rate': ohlcv_row.get('등락률')
+                            },
+                            'market_cap': cap_row.get('시가총액') if isinstance(cap_row, dict) else None,
+                            'shares': cap_row.get('상장주식수') if isinstance(cap_row, dict) else None
+                        })
+                    
+                    # DataFrame 즉시 삭제하여 메모리 확보
+                    del df_ohlcv
+                    del df_cap
+                    
                 except Exception as e:
                     self.logger.warning(f"Failed to get {market} data: {e}")
             
-            # 데이터 합치기
-            import pandas as pd
-            df_ohlcv = pd.concat(df_ohlcv_list) if df_ohlcv_list else pd.DataFrame()
-            df_cap = pd.concat(df_cap_list) if df_cap_list else pd.DataFrame()
-            
-            # ISIN 정보는 나중에 필요한 종목만 가져오기 위해 딕셔너리 초기화만
-            isin_info = {}
-            
-            # 시장별 티커 정보 수집
-            market_info = {}
-            name_info = {}
-            
-            for market in markets:
-                try:
-                    tickers = await loop.run_in_executor(None, stock.get_market_ticker_list, date_str, market)
-                    for ticker in tickers:
-                        market_info[ticker] = market
-                        if ticker not in name_info:
-                            name_info[ticker] = await loop.run_in_executor(None, stock.get_market_ticker_name, ticker)
-                except Exception as e:
-                    self.logger.warning(f"Failed to get {market} tickers: {e}")
-            
-            # 원시 데이터 구성
-            raw_data = []
-            for ticker in df_ohlcv.index:
-                ohlcv_row = df_ohlcv.loc[ticker]
-                cap_row = df_cap.loc[ticker] if ticker in df_cap.index else {}
-                
-                raw_data.append({
-                    'ticker': ticker,
-                    'name_kr': name_info.get(ticker, ticker),
-                    'market': market_info.get(ticker, 'UNKNOWN'),
-                    'trade_date': target_date,
-                    'ohlcv': {
-                        'open': ohlcv_row.get('시가'),
-                        'high': ohlcv_row.get('고가'),
-                        'low': ohlcv_row.get('저가'),
-                        'close': ohlcv_row.get('종가'),
-                        'volume': ohlcv_row.get('거래량'),
-                        'change_rate': ohlcv_row.get('등락률')
-                    },
-                    'market_cap': cap_row.get('시가총액') if isinstance(cap_row, dict) else None,
-                    'shares': cap_row.get('상장주식수') if isinstance(cap_row, dict) else None
-                })
             
             # 응답 생성
             return self.create_response(
@@ -109,7 +92,7 @@ class KRXExtractor(MarketDataExtractor):
                 metadata={
                     "trade_date": date_str,
                     "total_tickers": len(raw_data),
-                    "markets": list(set(market_info.values()))
+                    "markets": markets
                 }
             )
             

@@ -108,9 +108,12 @@ class ETLService:
                 extractor = KRXExtractor(self.postgres_db)
                 result = await extractor.extract(params)
                 
-                # 데이터를 임시 저장소에 저장
+                # Extract 결과 전체를 임시 저장소에 저장 (data와 metadata 포함)
                 task_id = result["task_id"]
-                self._task_data_store[task_id] = result["data"]
+                self._task_data_store[task_id] = {
+                    'data': result["data"],
+                    'metadata': result.get("metadata", {})
+                }
                 logger.info(f"Stored {len(result['data'])} items for task {task_id}")
                 
                 return result
@@ -131,8 +134,9 @@ class ETLService:
         if data is None:
             if task_id not in self._task_data_store:
                 raise ValueError(f"No data found for task_id: {task_id}")
+            # Transform은 data와 metadata를 포함한 전체 구조를 받음
             data = self._task_data_store[task_id]
-            logger.info(f"Retrieved {len(data)} items from task store for {task_id}")
+            logger.info(f"Retrieved data from task store for {task_id}")
         
         # 새로운 세션으로 transformer 재생성 (각 요청마다 새 세션 사용)
         async with self.postgres_db.session() as session:
@@ -151,7 +155,8 @@ class ETLService:
             else:
                 raise ValueError(f"Transformer not implemented for source: {source}")
             
-            logger.info(f"Transforming {len(data)} items for {source} (task: {task_id})")
+            data_count = len(data.get('data', [])) if isinstance(data, dict) else len(data)
+            logger.info(f"Transforming {data_count} items for {source} (task: {task_id})")
             
             # 설정에서 기본 규칙 로드
             default_rules = transformer_config.get('default_rules', {})

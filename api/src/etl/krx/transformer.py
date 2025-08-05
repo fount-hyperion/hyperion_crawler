@@ -141,15 +141,9 @@ class KRXTransformer(MarketDataTransformer):
             else:
                 transformed['trading_value'] = None
             
-            # 감사 필드 추가
-            transformed['created_by'] = "SYS_WORKFLOW"
-            transformed['updated_by'] = "SYS_WORKFLOW"
-            
             # 추가 메타데이터
             transformed['currency'] = 'KRW'
             transformed['data_source'] = 'KRX'
-            transformed['created_by'] = 'SYS_WORKFLOW'
-            transformed['updated_by'] = 'SYS_WORKFLOW'
             
             # 데이터 품질 체크
             if self._validate_transformed_data(transformed):

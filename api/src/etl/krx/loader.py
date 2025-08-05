@@ -274,3 +274,9 @@ class KRXLoader(MarketDataLoader):
         # TODO: latest_prices 테이블이 있다면 업데이트
         # 현재는 로깅만
         self.logger.info(f"Updated latest prices for {len(latest_data)} assets on {latest_date}")
+    
+    def add_metadata(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """메타데이터 추가 - KrsDailyPrices에 맞게 오버라이드"""
+        # KrsDailyPrices 테이블에는 created_by, updated_by, source 필드가 없음
+        # created_at, updated_at은 DB 서버 타임스탬프 사용
+        return data

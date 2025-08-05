@@ -111,7 +111,7 @@ steps:
           --region ${_REGION} \
           --platform managed \
           --allow-unauthenticated \
-          --memory 2Gi \
+          --memory 1Gi \
           --cpu 1 \
           --timeout 300 \
           --max-instances 10 \

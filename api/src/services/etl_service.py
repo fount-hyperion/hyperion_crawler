@@ -204,7 +204,12 @@ class ETLService:
             else:
                 raise ValueError(f"Loader not implemented for source: {source}")
             
-            logger.info(f"Loading {len(data)} items to {target} for {source} (task: {task_id})")
+            # 로깅을 위한 아이템 수 계산
+            if isinstance(data, dict):
+                item_count = len(data.get('price_data', [])) + len(data.get('new_assets', []))
+            else:
+                item_count = len(data)
+            logger.info(f"Loading {item_count} items to {target} for {source} (task: {task_id})")
             
             # 적재 모드 결정
             if not mode:

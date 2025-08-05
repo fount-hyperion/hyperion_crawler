@@ -228,6 +228,24 @@ main:
                     phase: "load"
                     task_id: ${task_id}
                     error: "Load phase failed"
+          # 데이터가 로드되지 않은 경우도 실패로 처리
+          - condition: ${load_response.body.items_loaded == 0 and transform_response.body.items_transformed > 0}
+            steps:
+              - log_no_data_loaded:
+                  call: sys.log
+                  args:
+                    data:
+                      message: "No data was loaded despite successful transform"
+                      loaded: ${load_response.body.items_loaded}
+                      transformed: ${transform_response.body.items_transformed}
+                      failed: ${load_response.body.items_failed}
+                    severity: "ERROR"
+              - return_no_data_loaded:
+                  return:
+                    status: "failed"
+                    phase: "load"
+                    task_id: ${task_id}
+                    error: "No data loaded"
     
     - log_load_success:
         call: sys.log

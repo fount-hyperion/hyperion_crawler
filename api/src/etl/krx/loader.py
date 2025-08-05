@@ -101,7 +101,7 @@ class KRXLoader(MarketDataLoader):
             self.logger.info(f"Load completed: {result.to_dict()}")
             
         except Exception as e:
-            self.logger.error(f"Load failed: {str(e)}")
+            self.logger.error(f"Load failed: {str(e)}", exc_info=True)
             result.add_failure(str(e))
         
         return result
@@ -144,11 +144,12 @@ class KRXLoader(MarketDataLoader):
     
     async def _upsert_data(self, data: List[Dict[str, Any]]) -> Dict[str, int]:
         """UPSERT 모드로 데이터 적재"""
-        # 업데이트할 컬럼 목록
+        # 업데이트할 컬럼 목록 (충돌 시 업데이트할 필드)
         update_columns = [
             'open_price', 'high_price', 'low_price', 'close_price',
             'volume', 'change_rate', 'change_amount', 'trading_value',
-            'market_cap', 'shares_outstanding', 'updated_at', 'updated_by'
+            'market_cap', 'shares_outstanding', 'updated_at', 'updated_by',
+            'data_source', 'currency'
         ]
         
         return await self.upsert_postgres(

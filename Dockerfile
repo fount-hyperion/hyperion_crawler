@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y \
 # Python 의존성 설치 (캐시 활용)
 COPY api/requirements.txt .
 
-# pip 업그레이드
+# pip 업그레이드 및 setuptools 시스템 전체 설치
 RUN pip install --upgrade pip setuptools wheel
 
 # Build argument로 GitHub 토큰 받기
@@ -44,10 +44,11 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-# 최소한의 시스템 패키지만 설치
+# 최소한의 시스템 패키지만 설치 및 setuptools 설치
 RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir setuptools \
     && useradd -m -u 1000 appuser
 
 # 빌드 스테이지에서 설치된 Python 패키지 복사

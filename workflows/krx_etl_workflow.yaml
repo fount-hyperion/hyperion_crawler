@@ -61,7 +61,7 @@ main:
                 args:
                   event_type: "etl.extract.failed"
                   phase: "extract"
-                  error: ${e}
+                  error: ${json.encode(e)}
                   task_id: ${task_id}
                   summary: null
             - raise_extract_error:
@@ -134,7 +134,7 @@ main:
                 args:
                   event_type: "etl.transform.failed"
                   phase: "transform"
-                  error: ${e}
+                  error: ${json.encode(e)}
                   task_id: ${task_id}
                   summary: null
             - raise_transform_error:
@@ -205,7 +205,7 @@ main:
                 args:
                   event_type: "etl.load.failed"
                   phase: "load"
-                  error: ${e}
+                  error: ${json.encode(e)}
                   task_id: ${task_id}
                   summary: null
             - raise_load_error:

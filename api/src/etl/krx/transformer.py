@@ -6,12 +6,14 @@ import logging
 from datetime import datetime, date
 import redis
 import json
+import asyncio
 
 from ..base import MarketDataTransformer
 from kardia.unique_key import UniqueKey
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from ...models import AssetMaster
+from pykrx.website import krx
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +140,15 @@ class KRXTransformer(MarketDataTransformer):
         # 1. 신규 상장 종목 처리
         new_symbols = krx_symbols - db_symbols
         if new_symbols:
+            # 신규 종목의 ISIN 정보 가져오기
+            isin_map = {}
+            try:
+                for symbol in new_symbols:
+                    isin = await self._get_isin_for_ticker(symbol)
+                    if isin:
+                        isin_map[symbol] = isin
+            except Exception as e:
+                self.logger.warning(f"Failed to get ISIN info: {e}")
             new_assets = []
             for symbol in new_symbols:
                 info = krx_symbol_info[symbol]
@@ -157,7 +168,7 @@ class KRXTransformer(MarketDataTransformer):
                     asset_type="STOCK",
                     asset_subtype="DOMESTIC",
                     symbol=symbol,
-                    isin=info.get('isin'),  # Extract에서 가져온 ISIN
+                    isin=isin_map.get(symbol),  # 개별 조회한 ISIN
                     name_kr=info['name_kr'],
                     name_en=None,  # TODO: 영문명 가져오기
                     market=info['market'],
@@ -339,6 +350,16 @@ class KRXTransformer(MarketDataTransformer):
         
         # 캐시에 없으면 에러 (bulk load에서 처리했어야 함)
         raise ValueError(f"Asset not found in cache: {symbol} ({market})")
+    
+    async def _get_isin_for_ticker(self, ticker: str) -> Optional[str]:
+        """개별 종목의 ISIN 조회"""
+        try:
+            loop = asyncio.get_event_loop()
+            isin = await loop.run_in_executor(None, krx.get_stock_ticker_isin, ticker)
+            return isin
+        except Exception as e:
+            self.logger.debug(f"Failed to get ISIN for {ticker}: {e}")
+            return None
     
     def _parse_trade_date(self, trade_date_str: str) -> date:
         """거래일 문자열을 date 객체로 변환"""

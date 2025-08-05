@@ -46,11 +46,8 @@ class KRXExtractor(MarketDataExtractor):
             # 시가총액 데이터 추출
             df_cap = await loop.run_in_executor(None, stock.get_market_cap_by_ticker, date_str)
             
-            # 전종목 기본정보 가져오기 (ISIN 등)
-            searcher = krx.상장종목검색()
-            df_listing = await loop.run_in_executor(None, searcher.fetch, "ALL")
-            # ISIN 정보를 딕셔너리로 변환
-            isin_info = {row['short_code']: row['full_code'] for _, row in df_listing.iterrows()}
+            # ISIN 정보는 나중에 필요한 종목만 가져오기 위해 딕셔너리 초기화만
+            isin_info = {}
             
             # 시장별 티커 정보 수집
             markets = validated_params.get("markets", ["KOSPI", "KOSDAQ"])
@@ -75,7 +72,6 @@ class KRXExtractor(MarketDataExtractor):
                 
                 raw_data.append({
                     'ticker': ticker,
-                    'isin': isin_info.get(ticker),  # ISIN 추가
                     'name_kr': name_info.get(ticker, ticker),
                     'market': market_info.get(ticker, 'UNKNOWN'),
                     'trade_date': target_date,

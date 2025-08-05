@@ -190,9 +190,9 @@ class KRXLoader(MarketDataLoader):
             self.logger.warning(f"Invalid UUID format: {uuid_str}")
             return False
         
-        # KRX UUID 형식 검증 (KRX-XXXXXX 형식)
-        if not uuid_str.startswith('KRX-') or len(uuid_str) != 11:
-            self.logger.warning(f"Invalid KRX UUID format: {uuid_str}")
+        # KRS UUID 형식 검증 (KRS-XXXXXX 형식)
+        if not uuid_str.startswith('KRS-') or len(uuid_str) != 11:
+            self.logger.warning(f"Invalid KRS UUID format: {uuid_str}")
             return False
         
         # 날짜 유효성 - 문자열도 허용 (YYYYMMDD 형식)

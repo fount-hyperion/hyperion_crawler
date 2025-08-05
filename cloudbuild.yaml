@@ -88,7 +88,7 @@ steps:
           --memory 1Gi \
           --cpu 1 \
           --timeout 300 \
-          --max-instances 10 \
+          --max-instances 1 \
           --min-instances 0 \
           --port 8080 \
           --service-account ${_SERVICE_ACCOUNT} \

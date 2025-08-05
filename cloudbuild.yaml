@@ -84,7 +84,7 @@ steps:
           --image ${_REGION}-docker.pkg.dev/$PROJECT_ID/hyperion-containers-dev/${_SERVICE_NAME}-${BRANCH_NAME}:${COMMIT_SHA} \
           --region ${_REGION} \
           --platform managed \
-          --allow-unauthenticated \
+          --no-allow-unauthenticated \
           --memory 1Gi \
           --cpu 1 \
           --timeout 300 \
@@ -93,7 +93,8 @@ steps:
           --port 8080 \
           --service-account ${_SERVICE_ACCOUNT} \
           --set-env-vars ENVIRONMENT=${BRANCH_NAME},GOOGLE_CLOUD_PROJECT=${PROJECT_ID} \
-          --no-use-http2
+          --no-use-http2 \
+          --cpu-throttling
         
         # 배포 실패 시 플래그 생성
         if [ $? -ne 0 ]; then
@@ -106,6 +107,7 @@ steps:
 # 빌드 로그 설정
 options:
   logging: CLOUD_LOGGING_ONLY
+  machineType: 'E2_HIGHCPU_8'  # 8 vCPU, 8GB RAM - 빠른 빌드
 
 # 빌드 시간 제한
 timeout: '1200s'  # 20분

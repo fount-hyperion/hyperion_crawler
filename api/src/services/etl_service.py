@@ -73,34 +73,17 @@ class ETLService:
     
     async def _initialize_components(self):
         """설정에 따라 ETL 컴포넌트 초기화"""
-        # SQLAlchemy 세션 생성
-        session = await self.postgres_db.get_session()
-        
-        try:
-            for source_name, source_config in self.config.get('sources', {}).items():
-                if not source_config.get('enabled', False):
-                    logger.info(f"Skipping disabled source: {source_name}")
-                    continue
-                
-                # Extractor 초기화
-                if source_name == "krx":
-                    self.extractors[source_name] = KRXExtractor()
-                    # Redis 클라이언트 가져오기
-                    redis_client = None
-                    if self.redis_db:
-                        try:
-                            redis_client = await self.redis_db.get_client()
-                        except Exception as e:
-                            logger.warning(f"Failed to get Redis client during initialization: {e}")
-                    self.transformers[source_name] = KRXTransformer(session, redis_client, source_config.get('transformer', {}))
-                    self.loaders[source_name] = KRXLoader(session, source_config.get('loader', {}).get('config', {}))
-                # TODO: 다른 데이터 소스들이 구현되면 추가
-                # elif source_name == "dart":
-                #     self.extractors[source_name] = DARTExtractor()
-                #     self.transformers[source_name] = DARTTransformer(session, source_config.get('transformer', {}))
-                #     self.loaders[source_name] = DARTLoader(session, source_config.get('loader', {}).get('config', {}))
-        finally:
-            await session.close()
+        # 각 컴포넌트는 필요할 때마다 새 세션으로 생성
+        for source_name, source_config in self.config.get('sources', {}).items():
+            if not source_config.get('enabled', False):
+                logger.info(f"Skipping disabled source: {source_name}")
+                continue
+            
+            # Extractor는 미리 등록만 (실제 세션은 extract_data에서 생성)
+            if source_name == "krx":
+                self.extractors[source_name] = "krx"  # placeholder
+                self.transformers[source_name] = "krx"  # placeholder
+                self.loaders[source_name] = "krx"  # placeholder
     
     async def extract_data(self, source: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
@@ -113,12 +96,18 @@ class ETLService:
         if source not in self.extractors:
             raise ValueError(f"No extractor registered for source: {source}")
         
-        extractor = self.extractors[source]
         logger.info(f"Extracting data from {source} with params: {params}")
         
         try:
-            result = await extractor.extract(params)
-            return result
+            # 새 세션으로 extractor 생성
+            async with self.postgres_db.session() as session:
+                if source == "krx":
+                    extractor = KRXExtractor(session)
+                else:
+                    raise ValueError(f"Extractor not implemented for source: {source}")
+                
+                result = await extractor.extract(params)
+                return result
         except Exception as e:
             logger.error(f"Failed to extract data from {source}: {str(e)}")
             raise
@@ -155,13 +144,15 @@ class ETLService:
                 default_rules.update(rules)
             
             try:
-                transformed_data = await transformer.transform(data, default_rules)
+                # Extract 결과를 그대로 transform에 전달
+                transformed_result = await transformer.transform(data, default_rules)
                 
                 return {
                     "task_id": task_id,
                     "source": source,
-                    "data": transformed_data,
-                    "count": len(transformed_data)
+                    "data": transformed_result,  # new_assets와 price_data를 포함
+                    "count": len(transformed_result.get('price_data', [])),
+                    "new_assets_count": len(transformed_result.get('new_assets', []))
                 }
             except Exception as e:
                 logger.error(f"Transform failed for {source}: {str(e)}")

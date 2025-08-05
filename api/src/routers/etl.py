@@ -112,7 +112,7 @@ async def transform_data(
         return TransformResponse(
             task_id=request.task_id,
             status="success",
-            items_transformed=len(result["data"]),
+            items_transformed=result["count"],
             data=result["data"]
         )
         

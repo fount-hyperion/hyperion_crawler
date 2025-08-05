@@ -1,12 +1,13 @@
 """
 KRX (Korea Exchange) 데이터 변환기
 """
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 import logging
 from datetime import datetime, date
 import redis
 import json
 import asyncio
+import pandas as pd
 
 from ..base import MarketDataTransformer
 from kardia.unique_key import UniqueKey
@@ -14,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from ...models import AssetMaster
 from pykrx.website import krx
+from pykrx import stock
 
 logger = logging.getLogger(__name__)
 
@@ -29,93 +31,123 @@ class KRXTransformer(MarketDataTransformer):
         self.redis = redis_client
         self.cache_ttl = 86400  # 24시간 캐싱
     
-    async def transform(self, data: List[Dict[str, Any]], rules: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    async def transform(self, data: List[Dict[str, Any]], rules: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         KRX 원시 데이터를 데이터베이스 형식으로 변환
-        
-        Args:
-            data: KRX에서 추출한 원시 데이터
-            rules: 변환 규칙
+        - Extract에서 받은 metadata의 new_assets를 처리하여 AssetMaster 데이터 생성
+        - 일일 가격 데이터를 krs_daily_prices 형식으로 변환
         """
         rules = rules or {}
-        transformed_data = []
         
-        # 스키마 검증
-        if not await self.validate_schema(data):
-            raise ValueError("Invalid data schema for KRX transformation")
+        # Extract 단계에서 받은 데이터와 메타데이터 분리
+        metadata = data.pop('metadata', {}) if isinstance(data, dict) else {}
+        price_data = data.get('data', []) if isinstance(data, dict) else data
+        new_assets_info = metadata.get('new_assets', [])
         
-        # 1. 당일 동기화 여부 확인
-        today = datetime.now().strftime('%Y%m%d')
-        sync_done = await self._check_daily_sync_done(today)
+        # 결과 데이터 구조
+        result = {
+            'new_assets': [],  # AssetMaster에 추가할 신규 종목
+            'price_data': []   # krs_daily_prices에 추가할 가격 데이터
+        }
         
-        if not sync_done:
-            # 당일 첫 실행: AssetMaster 동기화 (신규/삭제 확인)
-            await self._sync_asset_master(data)
-            await self._mark_daily_sync_done(today)
-        else:
-            # 당일 두 번째 이후 실행: 캐시에서 로드만
-            await self._load_cache_from_redis(today)
+        # 1. 신규 AssetMaster 데이터 생성
+        for asset_info in new_assets_info:
+            # 주식 종류 추론
+            stock_type = "보통주"
+            name_kr = asset_info.get('name_kr', '')
+            if name_kr.endswith("우"):
+                stock_type = "우선주"
+            elif name_kr.endswith("우B") or name_kr.endswith("2우B"):
+                stock_type = "우선주B"
+            
+            new_asset = {
+                'uuid': self.unique_key.generate("KRS", 6),  # KRS-XXXXXX
+                'asset_type': "STOCK",
+                'asset_subtype': "DOMESTIC",
+                'symbol': asset_info['ticker'],
+                'isin': asset_info.get('isin'),
+                'name_kr': name_kr,
+                'name_en': None,
+                'market': asset_info['market'],
+                'country_code': "KR",
+                'currency': "KRW",
+                'listing_date': await self._get_listing_date(asset_info['ticker']),
+                'delisting_date': None,
+                'is_active': True,
+                'asset_metadata': {
+                    "full_name_kr": name_kr,
+                    "security_type": "주권",
+                    "stock_type": stock_type,
+                    "par_value": await self._get_par_value(asset_info['ticker']),
+                    "shares_outstanding": str(asset_info.get('shares', 0)) if asset_info.get('shares') else None
+                },
+                'created_by': "SYS_WORKFLOW",
+                'updated_by': "SYS_WORKFLOW"
+            }
+            result['new_assets'].append(new_asset)
         
-        for item in data:
-            try:
-                # 캐시에서 UUID 가져오기 (이미 로드됨)
-                uuid = await self._get_or_create_asset_uuid(
-                    symbol=item['ticker'],
-                    name_kr=item['name_kr'],
-                    market=item['market']
-                )
-                
-                # 기본 변환
-                transformed = {
-                    'uuid': uuid,
-                    'trade_date': self._parse_trade_date(item['trade_date']),
-                    'open_price': self.clean_numeric(item['ohlcv']['open']),
-                    'high_price': self.clean_numeric(item['ohlcv']['high']),
-                    'low_price': self.clean_numeric(item['ohlcv']['low']),
-                    'close_price': self.clean_numeric(item['ohlcv']['close']),
-                    'volume': int(item['ohlcv']['volume']) if item['ohlcv']['volume'] else 0,
-                    'change_rate': self.clean_numeric(item['ohlcv']['change_rate']),
-                    'market_cap': self.normalize_market_cap(item.get('market_cap')),
-                    'shares_outstanding': int(item['shares']) if item.get('shares') else None
-                }
-                
-                # 추가 계산 (규칙에 따라)
-                if rules.get('calculate_change_amount', True) and transformed['close_price'] and transformed['change_rate'] is not None:
-                    transformed['change_amount'] = self.calculate_change_amount(
-                        transformed['close_price'],
-                        transformed['change_rate']
-                    )
-                else:
-                    transformed['change_amount'] = None
-                
-                if rules.get('calculate_trading_value', True) and transformed['close_price'] and transformed['volume']:
-                    transformed['trading_value'] = self.calculate_trading_value(
-                        transformed['close_price'],
-                        transformed['volume']
-                    )
-                else:
-                    transformed['trading_value'] = None
-                
-                # 추가 메타데이터
-                transformed['currency'] = 'KRW'
-                transformed['data_source'] = 'KRX'
-                transformed['created_by'] = 'SYS_WORKFLOW'
-                transformed['updated_by'] = 'SYS_WORKFLOW'
-                
-                # 데이터 품질 체크
-                if self._validate_transformed_data(transformed):
-                    transformed_data.append(transformed)
-                else:
-                    self.logger.warning(f"Invalid transformed data for {item['ticker']} on {item['trade_date']}")
-                    
-            except Exception as e:
-                self.logger.error(f"Failed to transform data for {item.get('ticker', 'UNKNOWN')}: {str(e)}")
+        # 2. 가격 데이터 변환
+        for item in price_data:
+            # UUID가 없는 경우 (신규 종목) new_assets에서 찾기
+            uuid = item.get('uuid')
+            if not uuid:
+                # 신규 종목의 UUID 매핑
+                for new_asset in result['new_assets']:
+                    if new_asset['symbol'] == item['ticker']:
+                        uuid = new_asset['uuid']
+                        break
+            
+            if not uuid:
+                self.logger.warning(f"No UUID found for ticker {item['ticker']}")
                 continue
+            
+            # 기본 변환
+            transformed = {
+                'uuid': uuid,
+                'trade_date': self._parse_trade_date(item['trade_date']),
+                'open_price': self.clean_numeric(item['ohlcv']['open']),
+                'high_price': self.clean_numeric(item['ohlcv']['high']),
+                'low_price': self.clean_numeric(item['ohlcv']['low']),
+                'close_price': self.clean_numeric(item['ohlcv']['close']),
+                'volume': int(item['ohlcv']['volume']) if item['ohlcv']['volume'] else 0,
+                'change_rate': self.clean_numeric(item['ohlcv']['change_rate']),
+                'market_cap': self.normalize_market_cap(item.get('market_cap')),
+                'shares_outstanding': int(item['shares']) if item.get('shares') else None
+            }
+            
+            # 추가 계산
+            if rules.get('calculate_change_amount', True) and transformed['close_price'] and transformed['change_rate'] is not None:
+                transformed['change_amount'] = self.calculate_change_amount(
+                    transformed['close_price'],
+                    transformed['change_rate']
+                )
+            else:
+                transformed['change_amount'] = None
+            
+            if rules.get('calculate_trading_value', True) and transformed['close_price'] and transformed['volume']:
+                transformed['trading_value'] = self.calculate_trading_value(
+                    transformed['close_price'],
+                    transformed['volume']
+                )
+            else:
+                transformed['trading_value'] = None
+            
+            # 추가 메타데이터
+            transformed['currency'] = 'KRW'
+            transformed['data_source'] = 'KRX'
+            transformed['created_by'] = 'SYS_WORKFLOW'
+            transformed['updated_by'] = 'SYS_WORKFLOW'
+            
+            # 데이터 품질 체크
+            if self._validate_transformed_data(transformed):
+                result['price_data'].append(transformed)
+            else:
+                self.logger.warning(f"Invalid transformed data for UUID {uuid}")
         
-        self.logger.info(f"Transformed {len(transformed_data)} out of {len(data)} records")
-        return transformed_data
+        self.logger.info(f"Transformed {len(result['new_assets'])} new assets and {len(result['price_data'])} price records")
+        return result
     
-    async def _sync_asset_master(self, data: List[Dict[str, Any]]):
+    async def _sync_asset_master_old(self, data: List[Dict[str, Any]]):
         """
         AssetMaster 동기화 - KRX 데이터와 DB를 비교하여 추가/삭제 처리
         당일 1번만 실행
@@ -218,7 +250,7 @@ class KRXTransformer(MarketDataTransformer):
         today = datetime.now().strftime('%Y%m%d')
         await self._save_cache_to_redis(today)
     
-    async def _load_cache_from_redis(self, date_key: str) -> bool:
+    async def _load_cache_from_redis_old(self, date_key: str) -> bool:
         """
         Redis에서 당일 AssetMaster 캐시 로드
         
@@ -241,7 +273,7 @@ class KRXTransformer(MarketDataTransformer):
         
         return False
     
-    async def _save_cache_to_redis(self, date_key: str):
+    async def _save_cache_to_redis_old(self, date_key: str):
         """
         AssetMaster 캐시를 Redis에 저장
         """
@@ -259,7 +291,7 @@ class KRXTransformer(MarketDataTransformer):
         except Exception as e:
             self.logger.warning(f"Failed to save to Redis cache: {e}")
     
-    async def _check_daily_sync_done(self, date_key: str) -> bool:
+    async def _check_daily_sync_done_old(self, date_key: str) -> bool:
         """
         당일 AssetMaster 동기화 완료 여부 확인
         """
@@ -273,7 +305,7 @@ class KRXTransformer(MarketDataTransformer):
             self.logger.warning(f"Failed to check sync status: {e}")
             return False
     
-    async def _mark_daily_sync_done(self, date_key: str):
+    async def _mark_daily_sync_done_old(self, date_key: str):
         """
         당일 AssetMaster 동기화 완료 표시
         """
@@ -288,16 +320,24 @@ class KRXTransformer(MarketDataTransformer):
         except Exception as e:
             self.logger.warning(f"Failed to mark sync done: {e}")
     
-    async def validate_schema(self, data: List[Dict[str, Any]]) -> bool:
+    async def validate_schema(self, data: Any) -> bool:
         """KRX 데이터 스키마 검증"""
-        if not data:
+        # Transform에서는 Extract 결과를 그대로 받음
+        if isinstance(data, dict) and 'data' in data:
+            price_data = data['data']
+        elif isinstance(data, list):
+            price_data = data
+        else:
+            return False
+            
+        if not price_data:
             return False
         
-        required_fields = ['ticker', 'name_kr', 'market', 'trade_date', 'ohlcv']
+        required_fields = ['ticker', 'market', 'trade_date', 'ohlcv']
         required_ohlcv_fields = ['close']
         
         # 첫 번째 레코드로 스키마 검증
-        sample = data[0]
+        sample = price_data[0]
         
         # 필수 필드 체크
         for field in required_fields:
@@ -341,7 +381,7 @@ class KRXTransformer(MarketDataTransformer):
             'indexes': ['trade_date', 'uuid']
         }
     
-    async def _get_or_create_asset_uuid(self, symbol: str, name_kr: str, market: str) -> str:
+    async def _get_or_create_asset_uuid_old(self, symbol: str, name_kr: str, market: str) -> str:
         """AssetMaster UUID 조회 (캐시에서만)"""
         # 캐시 확인 (이미 _bulk_load_asset_cache에서 로드됨)
         cache_key = f"{symbol}_{market}"
@@ -351,7 +391,7 @@ class KRXTransformer(MarketDataTransformer):
         # 캐시에 없으면 에러 (bulk load에서 처리했어야 함)
         raise ValueError(f"Asset not found in cache: {symbol} ({market})")
     
-    async def _get_isin_for_ticker(self, ticker: str) -> Optional[str]:
+    async def _get_isin_for_ticker_old(self, ticker: str) -> Optional[str]:
         """개별 종목의 ISIN 조회"""
         try:
             loop = asyncio.get_event_loop()
@@ -360,6 +400,47 @@ class KRXTransformer(MarketDataTransformer):
         except Exception as e:
             self.logger.debug(f"Failed to get ISIN for {ticker}: {e}")
             return None
+    
+    async def _get_listing_date(self, ticker: str) -> Optional[date]:
+        """종목의 상장일 조회"""
+        try:
+            loop = asyncio.get_event_loop()
+            # get_stock_major_changes의 첫 번째 날짜를 상장일로 간주
+            major_changes = await loop.run_in_executor(None, stock.get_stock_major_changes, ticker)
+            if not major_changes.empty:
+                return major_changes.index[0].date()
+            return None
+        except Exception as e:
+            self.logger.debug(f"Failed to get listing date for {ticker}: {e}")
+            return None
+    
+    async def _get_par_value(self, ticker: str) -> str:
+        """종목의 액면가 조회"""
+        try:
+            loop = asyncio.get_event_loop()
+            major_changes = await loop.run_in_executor(None, stock.get_stock_major_changes, ticker)
+            
+            if major_changes.empty:
+                return "5000"  # 기본 액면가
+            
+            # 역순으로 확인하여 최신 액면가 찾기
+            for idx in reversed(range(len(major_changes))):
+                val_after = major_changes['액면변경후'].iloc[idx]
+                if str(val_after) not in ['-', 'nan'] and pd.notna(val_after):
+                    # 0이면 무액면주식
+                    return str(val_after) if val_after != 0 else "0"
+            
+            # 변경 이력이 없다면 변경전 값 확인
+            for idx in range(len(major_changes)):
+                val_before = major_changes['액면변경전'].iloc[idx]
+                if str(val_before) not in ['-', 'nan', '0'] and pd.notna(val_before):
+                    return str(val_before)
+            
+            return "5000"  # 기본값
+            
+        except Exception as e:
+            self.logger.debug(f"Failed to get par value for {ticker}: {e}")
+            return "5000"
     
     def _parse_trade_date(self, trade_date_str: str) -> date:
         """거래일 문자열을 date 객체로 변환"""

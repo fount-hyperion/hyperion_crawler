@@ -9,7 +9,7 @@ from ..base import MarketDataLoader, LoadMode, LoadResult
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, delete
 from sqlalchemy.dialects.postgresql import insert
-from ...models import KrsDailyPrices
+from ...models import KrsDailyPrices, AssetMaster
 
 logger = logging.getLogger(__name__)
 
@@ -23,26 +23,42 @@ class KRXLoader(MarketDataLoader):
     
     async def load(
         self,
-        data: List[Dict[str, Any]],
+        data: Dict[str, Any],
         target: str = "krs_daily_prices",
         mode: LoadMode = LoadMode.UPSERT
     ) -> LoadResult:
         """
         KRX 데이터를 데이터베이스에 적재
-        
-        Args:
-            data: 적재할 데이터
-            target: 타겟 테이블 (기본: krs_daily_prices)
-            mode: 적재 모드
+        Transform에서 받은 데이터:
+        - new_assets: AssetMaster에 추가할 신규 종목
+        - price_data: krs_daily_prices에 추가할 가격 데이터
         """
         result = LoadResult()
         
-        if not data:
-            self.logger.warning("No data to load")
+        # Transform 결과 분리
+        new_assets = data.get('new_assets', [])
+        price_data = data.get('price_data', [])
+        
+        # 1. 신규 AssetMaster 저장
+        if new_assets:
+            try:
+                self.db.add_all([AssetMaster(**asset) for asset in new_assets])
+                await self.db.flush()
+                await self.db.commit()
+                self.logger.info(f"Added {len(new_assets)} new assets to AssetMaster")
+            except Exception as e:
+                self.logger.error(f"Failed to add new assets: {str(e)}")
+                await self.db.rollback()
+                result.add_failure(f"AssetMaster insert failed: {str(e)}")
+                return result
+        
+        # 2. 가격 데이터 적재
+        if not price_data:
+            self.logger.warning("No price data to load")
             return result
         
         # 적재 전 검증
-        valid_data, invalid_data = await self.validate_before_load(data, target)
+        valid_data, invalid_data = await self.validate_before_load(price_data, target)
         
         if invalid_data:
             for item in invalid_data:
@@ -89,7 +105,7 @@ class KRXLoader(MarketDataLoader):
         data: List[Dict[str, Any]],
         target: str
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """적재 전 데이터 검증"""
+        """적재 전 데이터 검증 - 최소한의 형변환만 수행"""
         valid_data = []
         invalid_data = []
         
@@ -184,7 +200,7 @@ class KRXLoader(MarketDataLoader):
                 self.logger.warning(f"Missing required field: {field}")
                 return False
         
-        # UUID 형식 검증만 수행 (Transform에서 이미 AssetMaster 생성/확인됨)
+        # UUID 형식 검증
         uuid_str = record.get('uuid', '')
         if not uuid_str or not isinstance(uuid_str, str):
             self.logger.warning(f"Invalid UUID format: {uuid_str}")

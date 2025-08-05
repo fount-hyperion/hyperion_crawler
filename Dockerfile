@@ -2,6 +2,9 @@
 # Stage 1: 빌드 환경
 FROM python:3.13-slim as builder
 
+# Docker BuildKit 캐시 활성화
+# syntax = docker/dockerfile:1.4
+
 WORKDIR /app
 
 # 빌드 도구 설치
@@ -14,23 +17,28 @@ RUN apt-get update && apt-get install -y \
 # Python 의존성 설치 (캐시 활용)
 COPY api/requirements.txt .
 
+# pip 업그레이드 및 캐시 최적화
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip setuptools wheel
+
 # Build argument로 GitHub 토큰 받기
 ARG GH_TOKEN
 
 # 모든 의존성 설치
-RUN if [ -n "$GH_TOKEN" ]; then \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ -n "$GH_TOKEN" ]; then \
         echo "Installing with GitHub authentication..."; \
         # Git config로 HTTPS URL을 토큰 포함 URL로 자동 변환
         git config --global url."https://${GH_TOKEN}@github.com/".insteadOf "https://github.com/" && \
         # Kardia latest 버전 설치
         pip install --user --no-cache-dir git+https://github.com/fount-hyperion/kardia.git@latest && \
         # 나머지 패키지 설치
-        pip install --user --no-cache-dir -r requirements.txt && \
+        pip install --user -r requirements.txt && \
         # 보안을 위해 git config 제거
         rm -rf ~/.gitconfig; \
     else \
         echo "Installing without private repository access..."; \
-        pip install --user --no-cache-dir -r requirements.txt; \
+        pip install --user -r requirements.txt; \
     fi
 
 # Stage 2: 실행 환경
